@@ -1,68 +1,79 @@
 -- lumberingGame.lua — Monetloader port
+-- IID=8: bid=90=старт, bid=91=стоп, bid=92=закрыть результат
+--
+-- Использование:
+--   /lumber       -- запустить вручную (когда стоишь у бревна)
+--   /ltiming N    -- сменить задержку между стартом и стопом (мс, по умолчанию 1000)
 
-local rageMode = false -- true = мгновенный клик в центр (100%), false = расчётный тайминг
+local IID     = 8     -- Interface ID мини-игры лесоповала
+local TIMING  = 1000  -- задержка между bid=90 и bid=91 (мс)
 
-local started = false
+local active  = false
 
--- Извлекаем числовые поля из JSON строкой без json-модуля
-local function parseGameData(str)
-    local function num(k)
-        return tonumber(str:match('"' .. k .. '"%s*:%s*([%-?%d%.]+)'))
-    end
-    if num('isMyState') ~= 1       then return nil end
-    if num('currentPosition') ~= -1 then return nil end
-    local s, w, sp = num('start'), num('width'), num('speed')
-    if not s or not w or not sp    then return nil end
-    return { start = s, width = w, speed = sp }
-end
-
-local function sendClick(iid, text)
+local function click(bid)
     local bs = raknetNewBitStream()
-    raknetBitStreamWriteInt8(bs, 220)
-    raknetBitStreamWriteInt8(bs, 63)
-    raknetBitStreamWriteInt8(bs, iid)
-    raknetBitStreamWriteInt32(bs, 0)
-    raknetBitStreamWriteInt32(bs, 0)
-    raknetBitStreamWriteInt32(bs, #text)
-    raknetBitStreamWriteString(bs, text)
+    raknetBitStreamWriteInt8(bs,  220)
+    raknetBitStreamWriteInt8(bs,  63)
+    raknetBitStreamWriteInt8(bs,  IID)
+    raknetBitStreamWriteInt32(bs, bid)
+    raknetBitStreamWriteInt32(bs, bid)  -- sub всегда равен bid (из лога)
+    raknetBitStreamWriteInt32(bs, 0)    -- данных нет
     raknetSendBitStreamEx(bs, 1, 10, 1)
     raknetDeleteBitStream(bs)
 end
 
-addEventHandler('onReceivePacket', function(pid, bs)
-    if pid ~= 220 then return end
-    raknetBitStreamSetReadOffset(bs, 0)
-    local ok0, _   = pcall(raknetBitStreamReadInt8, bs)
-    local ok1, b1  = pcall(raknetBitStreamReadInt8, bs)
-    if not ok0 or not ok1 or b1 ~= 84 then return end
-
-    local oi, iid = pcall(raknetBitStreamReadInt8, bs)
-    local os, sub = pcall(raknetBitStreamReadInt8, bs)
-    if not oi or not os then return end
-
-    local ol, len = pcall(raknetBitStreamReadInt32, bs)
-    if not ol or len <= 0 or len > 8192 then return end
-
-    local od, jsonStr = pcall(raknetBitStreamReadString, bs, len)
-    if not od or not jsonStr then return end
-
-    local gameData = parseGameData(jsonStr)
-    if not gameData or started then return end
-
+local function runSequence()
+    if active then return end
     thread.create(function()
-        local pos = math.floor(gameData.start + gameData.width / 2 + 0.5)
-        local pct = math.floor((pos - gameData.start) / gameData.width * 100 + 0.5)
-        started = true
-        sendClick(iid, 'lumbering-game.start')
-        local w = math.floor(pos / gameData.speed + 0.5) * 75
-        wait(rageMode and 50 or w)
-        started = false
-        sendClick(iid, ('lumbering-game.turnEnd|%d|%d'):format(pos, pct))
+        active = true
+        click(90)           -- Старт
+        wait(TIMING)        -- ждём пока топор в нужной точке
+        click(91)           -- Стоп
+        wait(4000)          -- ждём окно результата
+        click(92)           -- Закрыть результат
+        wait(500)
+        active = false
     end)
+end
+
+-- Авто-триггер: TOGGLE ON (b1=62) на IID=8 означает что игра активировалась
+addEventHandler('onReceivePacket', function(pid, bs)
+    if pid ~= 220 or active then return end
+    raknetBitStreamSetReadOffset(bs, 0)
+    local ok0, _  = pcall(raknetBitStreamReadInt8, bs)
+    local ok1, b1 = pcall(raknetBitStreamReadInt8, bs)
+    if not ok0 or not ok1 or b1 ~= 62 then return end
+
+    local oi, iid   = pcall(raknetBitStreamReadInt8, bs)
+    local ob, state = pcall(raknetBitStreamReadBool, bs)
+    if not oi or iid ~= IID then return end
+    if not ob or not state then return end  -- только TOGGLE ON
+
+    runSequence()
 end)
 
 function main()
     while not isSampAvailable() do wait(100) end
-    sampAddChatMessage('{2ECC71}[LumberBot] Loaded. rageMode=' .. tostring(rageMode), -1)
+
+    sampRegisterChatCommand('lumber', function()
+        if active then
+            sampAddChatMessage('{FF4444}[LumberBot] Already running!', -1)
+            return
+        end
+        runSequence()
+        sampAddChatMessage('{2ECC71}[LumberBot] Sequence started.', -1)
+    end)
+
+    sampRegisterChatCommand('ltiming', function(args)
+        local n = tonumber(args)
+        if not n or n < 100 then
+            sampAddChatMessage('{FF4444}[LumberBot] /ltiming <ms>', -1)
+            return
+        end
+        TIMING = n
+        sampAddChatMessage('{2ECC71}[LumberBot] Timing set to ' .. n .. ' ms', -1)
+    end)
+
+    sampAddChatMessage('{2ECC71}[LumberBot]{FFFFFF} IID=8 timing=' .. TIMING .. 'ms | /lumber | /ltiming <ms>', -1)
     while true do wait(0) end
 end

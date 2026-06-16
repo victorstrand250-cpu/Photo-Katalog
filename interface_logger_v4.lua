@@ -393,19 +393,28 @@ addEventHandler('onReceivePacket', function(pid, bs)
     raknetBitStreamSetReadOffset(bs, 0)
     local ok0, _  = pcall(raknetBitStreamReadInt8, bs)
     local ok1, b1 = pcall(raknetBitStreamReadInt8, bs)
-    if not ok0 or not ok1 or b1 ~= 84 then return end
+    if not ok0 or not ok1 then return end
 
     local oi, iid = pcall(raknetBitStreamReadInt8, bs)
-    local os, sub = pcall(raknetBitStreamReadInt8, bs)
-    if not oi or not os then return end
+    if not oi then return end
 
-    local ol, len = pcall(raknetBitStreamReadInt32, bs)
-    if not ol or len <= 0 or len > 8192 then return end
+    if b1 == 84 then
+        -- FM: sub + JSON data
+        local os, sub = pcall(raknetBitStreamReadInt8, bs)
+        if not os then return end
+        local ol, len = pcall(raknetBitStreamReadInt32, bs)
+        local data = 'FM sub=' .. sub
+        if ol and len and len > 0 and len < 8192 then
+            local od, s = pcall(raknetBitStreamReadString, bs, len)
+            if od and s and #s > 0 then data = data .. ' | ' .. s:sub(1, 500) end
+        end
+        addEntry('IN', iid, data)
 
-    local od, data = pcall(raknetBitStreamReadString, bs, len)
-    if not od or not data then return end
-
-    addEntry('IN', iid, data)
+    elseif b1 == 62 then
+        -- TOGGLE: ON/OFF
+        local ob, state = pcall(raknetBitStreamReadBool, bs)
+        addEntry('IN', iid, 'TOGGLE ' .. (ob and (state and 'ON' or 'OFF') or '?'))
+    end
 end)
 
 addEventHandler('onSendPacket', function(pid, bs)
