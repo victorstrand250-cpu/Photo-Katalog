@@ -1,23 +1,29 @@
 -- lumberingGame.lua — Monetloader port
 -- Автоматизация мини-игры лесоповала на Arizona RP Mobile
 --
--- /lumber        — запустить последовательность (если интерфейс уже открыт)
--- /ltiming N     — задать задержку мс (подбирается вручную)
--- /lscan         — включить/выключить умный сканер (работает если сервер шлёт JSON)
+-- /lumber        -- ручной старт (если интерфейс уже открыт)
+-- /ltiming N     -- задать задержку мс
+-- /lcalib        -- режим авто-калибровки (подбирает тайминг сам, за 4-6 попыток)
+-- /lscan         -- умный режим (только если сервер шлёт JSON параметры)
 --
--- Как подобрать тайминг:
---   1. /lumber → смотри в чат УСПЕХ/ПРОМАХ
---   2. Если ПРОМАХ — попробуй /ltiming 800 или /ltiming 1200
---   3. Повторяй пока не будет УСПЕХ
---   4. Запомни это значение
+-- ПРИМЕЧАНИЕ: тайминг подбирается вручную через /ltiming или авто через /lcalib.
+-- Для полного автоматического режима нужно декодировать бинарный пакет
+-- сервера. Используй gameBinaryScanner.lua для сбора данных.
 
 local IID    = 8
-local TIMING = 1000  -- задержка между START и STOP (мс)
+local TIMING = 1000  -- базовая задержка мс
 
 local running    = false
 local triggered  = false
 local scanning   = false
-local calcTiming = nil  -- nil = используем TIMING
+local calcTiming = nil
+
+-- Режим авто-калибровки
+local calibMode   = false
+local calibStep   = 150  -- шаг подбора мс
+local calibDir    = 1    -- +1 вверх, -1 вниз
+local calibTries  = 0
+local calibBest   = nil  -- лучший тайминг (если нашли успех)
 
 -- ===================================================
 --  ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
@@ -37,41 +43,74 @@ local function numField(str, key)
 end
 
 -- ===================================================
---  РЕЗУЛЬТАТ МИНИ-ИГРЫ (success / fail)
---  Пакет: pid=220, b1=84, IID=8 → JSON [{"chance":N,"success":0|1}]
+--  РЕЗУЛЬТАТ МИНИ-ИГРЫ
+--  Пакет: pid=220, b1=84, IID=8 -> JSON [{"chance":N,"success":0|1}]
 -- ===================================================
 addEventHandler('onReceivePacket', function(pid, bs)
     if pid ~= 220 then return end
     raknetBitStreamSetReadOffset(bs, 0)
-    pcall(raknetBitStreamReadInt8, bs)                   -- пропускаем byte pid
+    pcall(raknetBitStreamReadInt8, bs)
     local ok1, b1  = pcall(raknetBitStreamReadInt8, bs)
-    if not ok1 or b1 ~= 84 then return end               -- b1=84 FM
+    if not ok1 or b1 ~= 84 then return end
     local ok2, iid = pcall(raknetBitStreamReadInt8, bs)
-    if not ok2 or iid ~= IID then return end              -- наш IID
+    if not ok2 or iid ~= IID then return end
 
     local raw     = readRaw(bs, 150)
     local success = numField(raw, 'success')
     if success == nil then return end
 
-    local chance  = numField(raw, 'chance') or 0
-    local usedT   = calcTiming or TIMING
+    local chance = numField(raw, 'chance') or 0
+    local usedT  = calcTiming or TIMING
 
     if success == 1 then
         sampAddChatMessage(string.format(
-            '{2ECC71}[LumberBot] УСПЕХ! chance=%d%% тайминг=%dмс',
+            '{2ECC71}[LumberBot] SUCCESS! chance=%d%% timing=%dms',
             chance, usedT), -1)
+        -- Сохраняем удачный тайминг при калибровке
+        if calibMode then
+            calibBest  = usedT
+            calibTries = 0
+            calibDir   = 1
+            calibStep  = 150
+            sampAddChatMessage('{2ECC71}[LumberBot] Calibrated! Use /ltiming ' .. usedT, -1)
+            calibMode = false
+        end
     else
         sampAddChatMessage(string.format(
-            '{FF4444}[LumberBot] ПРОМАХ! chance=%d%% тайминг=%dмс',
+            '{FF4444}[LumberBot] MISS! chance=%d%% timing=%dms',
             chance, usedT), -1)
-        sampAddChatMessage('{FFAA00}  Попробуй /ltiming ' .. math.floor(usedT * 0.85) ..
-            ' или /ltiming ' .. math.floor(usedT * 1.15), -1)
+        -- Авто-калибровка: подсказываем следующий тайминг
+        if calibMode and calibTries < 6 then
+            calibTries = calibTries + 1
+            -- Попеременно пробуем выше/ниже с нарастающим шагом
+            if calibDir == 1 then
+                TIMING  = usedT + calibStep
+                calibDir = -1
+            else
+                TIMING  = usedT - calibStep * 2
+                calibDir = 1
+                calibStep = math.floor(calibStep * 1.3)
+            end
+            sampAddChatMessage(string.format(
+                '{FFAA00}[LumberBot] Calib try %d/6 -> next timing=%dms',
+                calibTries, TIMING), -1)
+            sampAddChatMessage('{AAAAAA}Walk to log again to retry.', -1)
+        elseif calibMode then
+            sampAddChatMessage('{FF4444}[LumberBot] Calib failed after 6 tries.', -1)
+            sampAddChatMessage('{FFAA00}Try /ltiming manually (500-2000ms range)', -1)
+            calibMode  = false
+            calibTries = 0
+        else
+            -- Подсказки для ручного режима
+            sampAddChatMessage(string.format(
+                '{FFAA00}Try /ltiming %d  or  /ltiming %d',
+                math.floor(usedT * 0.80), math.floor(usedT * 1.20)), -1)
+        end
     end
 end)
 
 -- ===================================================
---  УМНЫЙ СКАНЕР: ищем JSON с isMyState в любом пакете
---  Работает на ПК с arizona-events. На мобиле — запасной вариант.
+--  УМНЫЙ СКАНЕР: ищем JSON isMyState (работает только на ПК)
 -- ===================================================
 addEventHandler('onReceivePacket', function(pid, bs)
     if not scanning or running then return end
@@ -82,13 +121,10 @@ addEventHandler('onReceivePacket', function(pid, bs)
     if numField(raw, 'isMyState') ~= 1 then return end
     if numField(raw, 'currentPosition') ~= -1 then return end
 
-    local s  = numField(raw, 'start')
-    local w  = numField(raw, 'width')
-    local sp = numField(raw, 'speed')
-
+    local s, w, sp = numField(raw,'start'), numField(raw,'width'), numField(raw,'speed')
     if not s or not w or not sp then
-        sampAddChatMessage('{FFAA00}[LumberBot] Пакет найден, параметры не распознаны', -1)
-        sampAddChatMessage('{AAAAAA}raw: ' .. raw:sub(1, 100), -1)
+        sampAddChatMessage('{FFAA00}[LumberBot] Found packet but params not parsed', -1)
+        sampAddChatMessage('{AAAAAA}' .. raw:sub(1, 100), -1)
         return
     end
 
@@ -96,7 +132,7 @@ addEventHandler('onReceivePacket', function(pid, bs)
     calcTiming = math.floor(pos / sp + 0.5) * 75
 
     sampAddChatMessage(string.format(
-        '{00FF80}[LumberBot] АВТО: start=%.1f w=%.1f sp=%.2f → %dмс',
+        '{00FF80}[LumberBot] AUTO: start=%.1f w=%.1f sp=%.2f -> %dms',
         s, w, sp, calcTiming), -1)
 
     scanning  = false
@@ -104,24 +140,24 @@ addEventHandler('onReceivePacket', function(pid, bs)
 end)
 
 -- ===================================================
---  АВТО-ТРИГГЕР через TOGGLE ON (b1=62) для IID=8
---  Срабатывает когда сервер открывает интерфейс лесоповала
+--  АВТО-ТРИГГЕР: TOGGLE ON (b1=62) для IID=8
+--  Срабатывает автоматически когда сервер открывает игру
 -- ===================================================
 addEventHandler('onReceivePacket', function(pid, bs)
     if pid ~= 220 or running or scanning then return end
     raknetBitStreamSetReadOffset(bs, 0)
-    pcall(raknetBitStreamReadInt8, bs)                   -- skip pid byte
+    pcall(raknetBitStreamReadInt8, bs)
     local ok1, b1    = pcall(raknetBitStreamReadInt8, bs)
-    if not ok1 or b1 ~= 62 then return end               -- b1=62 TOGGLE
+    if not ok1 or b1 ~= 62 then return end
     local ok2, iid   = pcall(raknetBitStreamReadInt8, bs)
     if not ok2 or iid ~= IID then return end
     local ok3, state = pcall(raknetBitStreamReadBool, bs)
-    if not ok3 or not state then return end               -- state=true → ON
+    if not ok3 or not state then return end
 
     calcTiming = nil
     triggered  = true
-    sampAddChatMessage('{00FFCC}[LumberBot] Интерфейс открыт → старт через ' ..
-        (calcTiming or TIMING) .. 'мс', -1)
+    sampAddChatMessage(string.format(
+        '{00FFCC}[LumberBot] Game opened! timing=%dms', TIMING), -1)
 end)
 
 -- ===================================================
@@ -149,35 +185,48 @@ function main()
         scanning = not scanning
         calcTiming = nil
         sampAddChatMessage(
-            scanning and '{00FFCC}[LumberBot] Сканер ВКЛ — начни мини-игру!'
-                      or '{AAAAAA}[LumberBot] Сканер ВЫКЛ', -1)
+            scanning and '{00FFCC}[LumberBot] Scanner ON - start mini-game!'
+                      or '{AAAAAA}[LumberBot] Scanner OFF', -1)
     end)
 
     sampRegisterChatCommand('lumber', function()
         if running then
-            sampAddChatMessage('{FF4444}[LumberBot] Уже выполняется!', -1)
+            sampAddChatMessage('{FF4444}[LumberBot] Already running!', -1)
             return
         end
         calcTiming = nil
         triggered  = true
-        sampAddChatMessage('{2ECC71}[LumberBot] Ручной старт! Тайминг=' .. TIMING .. 'мс', -1)
+        sampAddChatMessage('{2ECC71}[LumberBot] Manual start! timing=' .. TIMING .. 'ms', -1)
     end)
 
     sampRegisterChatCommand('ltiming', function(args)
         local n = tonumber(args)
         if not n or n < 50 then
-            sampAddChatMessage('{FF4444}[LumberBot] Использование: /ltiming <мс>  (мин 50)', -1)
-            sampAddChatMessage('{AAAAAA}  Текущий тайминг: ' .. TIMING .. 'мс', -1)
+            sampAddChatMessage('{FF4444}[LumberBot] Usage: /ltiming <ms>  (min 50)', -1)
+            sampAddChatMessage('{AAAAAA}  Current: ' .. TIMING .. 'ms', -1)
             return
         end
-        TIMING = n
-        sampAddChatMessage('{2ECC71}[LumberBot] Тайминг установлен: ' .. n .. 'мс', -1)
+        TIMING     = n
+        calibBest  = nil
+        calibTries = 0
+        sampAddChatMessage('{2ECC71}[LumberBot] Timing set: ' .. n .. 'ms', -1)
+    end)
+
+    sampRegisterChatCommand('lcalib', function()
+        calibMode  = not calibMode
+        calibTries = 0
+        calibDir   = 1
+        calibStep  = 150
+        if calibMode then
+            sampAddChatMessage('{00FFCC}[LumberBot] Calibration ON', -1)
+            sampAddChatMessage('{AAAAAA}Walk to logs - bot will adjust timing each try', -1)
+        else
+            sampAddChatMessage('{AAAAAA}[LumberBot] Calibration OFF', -1)
+        end
     end)
 
     sampAddChatMessage(
-        '{2ECC71}[LumberBot]{FFFFFF} /lumber | /ltiming <мс> | /lscan', -1)
-    sampAddChatMessage(
-        '{AAAAAA}Авто-режим: подходи к бревну — бот сам нажмёт старт/стоп', -1)
+        '{2ECC71}[LumberBot]{FFFFFF} /lumber | /ltiming <ms> | /lcalib | /lscan', -1)
 
     while true do
         if triggered and not running then
@@ -185,12 +234,11 @@ function main()
             running    = true
             local t    = calcTiming or TIMING
 
-            sampAddChatMessage('{00FFCC}[LumberBot] Клик START...', -1)
-            click(90)       -- START
+            click(90)     -- START
             wait(t)
-            click(91)       -- STOP
-            wait(4000)      -- ждём анимацию результата
-            click(92)       -- CLOSE
+            click(91)     -- STOP
+            wait(4000)    -- wait for result animation
+            click(92)     -- CLOSE
             wait(500)
 
             running    = false
