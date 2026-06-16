@@ -1,11 +1,12 @@
 -- interface_logger_v4.lua
 -- /il          -- окно вкл/выкл
 -- /ilclear     -- очистить лог
+-- /ilsave      -- сохранить лог в файл
 -- /ilsend <iid> <bid> <sub> [data]  -- ручная отправка клика
 
 script_name('InterfaceLogger')
 script_author('Victor Strand')
-script_version('4.0')
+script_version('4.1')
 
 local imgui = require('mimgui')
 local enc   = require('encoding')
@@ -16,39 +17,82 @@ local MDS = MONET_DPI_SCALE
 local sw, sh = getScreenResolution()
 
 -- ===================================================
+--  СТРОКИ (CP1251 hex -> u8() -> UTF-8 для imgui)
+-- ===================================================
+local S = {
+    -- imgui заголовки (CP1251 байты через u8())
+    title      = u8('\xc8\xed\xf2\xe5\xf0\xf4\xe5\xe9\xf1 \xcb\xee\xe3\xe3\xe5\xf0 v4'),
+    rec_on     = u8('\xc7\xc0\xcf\xc8\xd1\xdc  \xc2\xca\xcb'),
+    rec_off    = u8('\xc7\xc0\xcf\xc8\xd1\xdc  \xc2\xdb\xca\xcb'),
+    clear      = u8('\xce\xf7\xe8\xf1\xf2\xe8\xf2\xfc'),
+    save_btn   = u8('\xd1\xee\xf5\xf0\xe0\xed\xe8\xf2\xfc \xeb\xee\xe3'),
+    autoscroll = u8('\xc0\xe2\xf2\xee\xf1\xea\xf0\xee\xeb\xeb'),
+    iid_list   = u8('\xd1\xef\xe8\xf1\xee\xea IID'),
+    all_iids   = u8('[ \xc2\xf1\xe5 IID ]'),
+    game_tag   = '[GAME]',
+    pkt_in     = '[IN ]',
+    pkt_out    = '[OUT]',
+}
+
+-- ===================================================
 --  СОСТОЯНИЕ
 -- ===================================================
-local recording = true  -- запись включена сразу
-local entries   = {}    -- { time, dir, iid, data, isGame }
-local iidInfo   = {}    -- iid -> { count, isGame }
+local recording = true
+local entries   = {}
+local iidInfo   = {}   -- iid -> { count, isGame }
 local MAX_ENT   = 300
 
 local mainWindow = new.bool(false)
 local filterIID  = new.int(-1)
 local autoScroll = new.bool(true)
 
--- Пакет помечается как игровой если содержит признаки мини-игры
 local function isGameData(str)
     return str:find('"isMyState"') ~= nil
-        or str:find('lumbering') ~= nil
-        or str:find('mini%-game') ~= nil
-        or str:find('miniGame')  ~= nil
+        or str:find('lumbering')   ~= nil
+        or str:find('mini%-game')  ~= nil
+        or str:find('miniGame')    ~= nil
 end
 
 local function addEntry(dir, iid, data)
-    local isGame = isGameData(data or '')
-    if not iidInfo[iid] then iidInfo[iid] = { count = 0, isGame = false } end
-    iidInfo[iid].count  = iidInfo[iid].count + 1
-    if isGame then iidInfo[iid].isGame = true end
-
+    local g = isGameData(data or '')
+    if not iidInfo[iid] then iidInfo[iid] = {count = 0, isGame = false} end
+    iidInfo[iid].count = iidInfo[iid].count + 1
+    if g then iidInfo[iid].isGame = true end
     if #entries >= MAX_ENT then table.remove(entries, 1) end
     table.insert(entries, {
         time   = os.date('%H:%M:%S'),
         dir    = dir,
         iid    = iid,
         data   = data or '',
-        isGame = isGame,
+        isGame = g,
     })
+end
+
+-- ===================================================
+--  СОХРАНЕНИЕ ЛОГА В ФАЙЛ
+-- ===================================================
+local function saveLog()
+    local dir = getWorkingDirectory() .. '/logs'
+    if not doesDirectoryExist(dir) then createDirectory(dir) end
+    local fname  = 'ilog_' .. os.date('%Y%m%d_%H%M%S') .. '.txt'
+    local fpath  = dir .. '/' .. fname
+    local f = io.open(fpath, 'w')
+    if not f then
+        sampAddChatMessage('{FF4444}[IL] Save failed: cannot create file', -1)
+        return
+    end
+    local fi = filterIID[0]
+    local n  = 0
+    for _, e in ipairs(entries) do
+        if fi == -1 or e.iid == fi then
+            f:write(string.format('[%s] [%s] IID=%-3d  %s\n',
+                e.time, e.dir, e.iid, e.data))
+            n = n + 1
+        end
+    end
+    f:close()
+    sampAddChatMessage('{2ECC71}[IL] Saved ' .. n .. ' lines:', -1)
+    sampAddChatMessage('{FFFFFF}' .. fpath, -1)
 end
 
 -- ===================================================
@@ -65,7 +109,7 @@ imgui.OnInitialize(function()
     local ttf = getWorkingDirectory() .. '/lib/mimgui/trebucbd.ttf'
     if doesFileExist(ttf) then
         local r = io.Fonts:GetGlyphRangesCyrillic()
-        fTitle = io.Fonts:AddFontFromFileTTF(ttf, 16*MDS, nil, r)
+        fTitle = io.Fonts:AddFontFromFileTTF(ttf, 17*MDS, nil, r)
         fMain  = io.Fonts:AddFontFromFileTTF(ttf, 14*MDS, nil, r)
         fMono  = io.Fonts:AddFontFromFileTTF(ttf, 12*MDS, nil, r)
     end
@@ -78,8 +122,8 @@ imgui.OnInitialize(function()
     s.FrameRounding   = 5*MDS
     s.ChildRounding   = 5*MDS
     s.ScrollbarSize   = 10*MDS
-    s.WindowBorderSize= 1
-    s.ChildBorderSize = 1
+    s.WindowBorderSize = 1
+    s.ChildBorderSize  = 1
 
     local c = s.Colors
     local I = imgui.Col
@@ -105,14 +149,14 @@ imgui.OnInitialize(function()
 end)
 
 -- ===================================================
---  ЦВЕТА UI
+--  ЦВЕТА
 -- ===================================================
-local C_IN    = imgui.ImVec4(0.35, 0.75, 1.00, 1.0)   -- входящий
-local C_OUT   = imgui.ImVec4(1.00, 0.58, 0.28, 1.0)   -- исходящий
-local C_GAME  = imgui.ImVec4(0.18, 1.00, 0.50, 1.0)   -- игровой пакет
-local C_DATA  = imgui.ImVec4(0.55, 0.88, 0.68, 0.90)  -- данные
-local C_MUTED = imgui.ImVec4(0.40, 0.40, 0.50, 1.0)   -- вторичный текст
-local C_IID   = imgui.ImVec4(0.85, 0.90, 1.00, 1.0)   -- IID
+local C_IN   = imgui.ImVec4(0.35, 0.75, 1.00, 1.0)
+local C_OUT  = imgui.ImVec4(1.00, 0.58, 0.28, 1.0)
+local C_GAME = imgui.ImVec4(0.18, 1.00, 0.50, 1.0)
+local C_DATA = imgui.ImVec4(0.55, 0.88, 0.68, 0.90)
+local C_MUTED= imgui.ImVec4(0.40, 0.40, 0.50, 1.0)
+local C_IID  = imgui.ImVec4(0.85, 0.90, 1.00, 1.0)
 
 -- ===================================================
 --  UI
@@ -123,23 +167,26 @@ imgui.OnFrame(
         self.HideCursor = false
         if fMain then imgui.PushFont(fMain) end
 
-        imgui.SetNextWindowSize(imgui.ImVec2(720*MDS, 530*MDS), imgui.Cond.FirstUseEver)
+        -- Окно почти на весь экран
+        imgui.SetNextWindowSize(
+            imgui.ImVec2(sw - 20, sh - 60),
+            imgui.Cond.FirstUseEver)
         imgui.SetNextWindowPos(
             imgui.ImVec2(sw/2, sh/2),
             imgui.Cond.FirstUseEver,
             imgui.ImVec2(0.5, 0.5))
 
-        local wFlags = imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse
+        local wF = imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoScrollWithMouse
         if fTitle then imgui.PushFont(fTitle) end
-        imgui.Begin(u8('Interface Logger v4'), mainWindow, wFlags)
+        imgui.Begin(S.title, mainWindow, wF)
         if fTitle then imgui.PopFont() end
 
         -- ------------------------------------------------
-        -- Шапка: кнопки управления
+        -- Шапка
         -- ------------------------------------------------
-        local bH = 28 * MDS
+        local bH = 32 * MDS
 
-        -- Кнопка запись
+        -- Кнопка записи
         if recording then
             imgui.PushStyleColor(imgui.Col.Button,
                 imgui.ImVec4(0.06, 0.44, 0.22, 1))
@@ -147,32 +194,47 @@ imgui.OnFrame(
                 imgui.ImVec4(0.08, 0.56, 0.28, 1))
         else
             imgui.PushStyleColor(imgui.Col.Button,
-                imgui.ImVec4(0.30, 0.08, 0.08, 1))
+                imgui.ImVec4(0.32, 0.08, 0.08, 1))
             imgui.PushStyleColor(imgui.Col.ButtonHovered,
-                imgui.ImVec4(0.44, 0.12, 0.12, 1))
+                imgui.ImVec4(0.46, 0.12, 0.12, 1))
         end
         imgui.PushStyleColor(imgui.Col.ButtonActive,
-            imgui.ImVec4(0.05, 0.05, 0.08, 1))
-        if imgui.Button(
-            recording and u8('  ЗАПИСЬ ВКЛ  ') or u8('  ЗАПИСЬ ВЫКЛ  '),
-            imgui.ImVec2(130*MDS, bH)) then
+            imgui.ImVec4(0.04, 0.04, 0.07, 1))
+        if imgui.Button(recording and S.rec_on or S.rec_off,
+                imgui.ImVec2(160*MDS, bH)) then
             recording = not recording
+            sampAddChatMessage(
+                recording and '{2ECC71}[IL] Recording ON'
+                           or '{E74C3C}[IL] Recording OFF', -1)
         end
         imgui.PopStyleColor(3)
 
         imgui.SameLine()
-        if imgui.Button(u8('Очистить'), imgui.ImVec2(90*MDS, bH)) then
-            entries  = {}
-            iidInfo  = {}
+        if imgui.Button(S.clear, imgui.ImVec2(100*MDS, bH)) then
+            entries = {}
+            iidInfo = {}
             filterIID[0] = -1
+            sampAddChatMessage('{AAAAAA}[IL] Log cleared.', -1)
         end
 
         imgui.SameLine()
-        imgui.SetCursorPosY(imgui.GetCursorPosY() + 4*MDS)
-        imgui.Checkbox(u8('Автоскролл'), autoScroll)
+        imgui.PushStyleColor(imgui.Col.Button,
+            imgui.ImVec4(0.08, 0.22, 0.14, 1))
+        imgui.PushStyleColor(imgui.Col.ButtonHovered,
+            imgui.ImVec4(0.12, 0.32, 0.20, 1))
+        imgui.PushStyleColor(imgui.Col.ButtonActive,
+            imgui.ImVec4(0.04, 0.04, 0.07, 1))
+        if imgui.Button(S.save_btn, imgui.ImVec2(160*MDS, bH)) then
+            saveLog()
+        end
+        imgui.PopStyleColor(3)
 
         imgui.SameLine()
-        imgui.SetCursorPosY(imgui.GetCursorPosY() + 4*MDS)
+        imgui.SetCursorPosY(imgui.GetCursorPosY() + 5*MDS)
+        imgui.Checkbox(S.autoscroll, autoScroll)
+
+        imgui.SameLine()
+        imgui.SetCursorPosY(imgui.GetCursorPosY() + 5*MDS)
         imgui.PushStyleColor(imgui.Col.Text, C_MUTED)
         imgui.Text(#entries .. ' / ' .. MAX_ENT)
         imgui.PopStyleColor()
@@ -180,35 +242,37 @@ imgui.OnFrame(
         imgui.Separator()
 
         -- ------------------------------------------------
-        -- Тело: левая колонка (IID список) + правая (пакеты)
+        -- Тело: левая панель (IID) + правая (пакеты)
         -- ------------------------------------------------
         local avail  = imgui.GetContentRegionAvail()
-        local leftW  = 185 * MDS
+        local leftW  = 210 * MDS
         local rightW = avail.x - leftW - 8*MDS
         local bodyH  = avail.y
 
-        -- ЛЕВАЯ ПАНЕЛЬ — список IID
+        -- ЛЕВАЯ ПАНЕЛЬ
         imgui.BeginChild('##left', imgui.ImVec2(leftW, bodyH), true)
 
         imgui.PushStyleColor(imgui.Col.Text, C_GAME)
-        imgui.Text(u8('Список IID'))
+        if fMain then imgui.PushFont(fMain) end
+        imgui.Text(S.iid_list)
+        if fMain then imgui.PopFont() end
         imgui.PopStyleColor()
         imgui.Spacing()
 
-        -- Кнопка "Все"
+        -- Кнопка "Все IID"
         local allSel = (filterIID[0] == -1)
         imgui.PushStyleColor(imgui.Col.Button,
             allSel and imgui.ImVec4(0.14, 0.46, 0.26, 1)
                    or  imgui.ImVec4(0.10, 0.10, 0.16, 1))
         imgui.PushStyleColor(imgui.Col.ButtonHovered,
             imgui.ImVec4(0.18, 0.56, 0.32, 1))
-        if imgui.Button(u8('[ Все IID ]'), imgui.ImVec2(-1, 26*MDS)) then
+        if imgui.Button(S.all_iids, imgui.ImVec2(-1, 30*MDS)) then
             filterIID[0] = -1
         end
         imgui.PopStyleColor(2)
         imgui.Spacing()
 
-        -- IID кнопки, сортированные
+        -- Кнопки IID
         local sorted = {}
         for iid in pairs(iidInfo) do sorted[#sorted+1] = iid end
         table.sort(sorted)
@@ -218,12 +282,11 @@ imgui.OnFrame(
             local sel  = (filterIID[0] == iid)
 
             if info.isGame then
-                -- Игровой IID — зелёный
                 imgui.PushStyleColor(imgui.Col.Button,
-                    sel and imgui.ImVec4(0.08, 0.38, 0.18, 1)
-                        or  imgui.ImVec4(0.06, 0.22, 0.12, 1))
+                    sel and imgui.ImVec4(0.08, 0.40, 0.18, 1)
+                        or  imgui.ImVec4(0.06, 0.24, 0.12, 1))
                 imgui.PushStyleColor(imgui.Col.ButtonHovered,
-                    imgui.ImVec4(0.10, 0.48, 0.22, 1))
+                    imgui.ImVec4(0.10, 0.50, 0.22, 1))
             else
                 imgui.PushStyleColor(imgui.Col.Button,
                     sel and imgui.ImVec4(0.16, 0.16, 0.28, 1)
@@ -232,17 +295,16 @@ imgui.OnFrame(
                     imgui.ImVec4(0.20, 0.20, 0.32, 1))
             end
 
-            local label = (info.isGame and '[GAME] ' or '       ')
-                .. 'IID ' .. iid
-            if imgui.Button(label, imgui.ImVec2(-1, 26*MDS)) then
+            local lbl = (info.isGame and '[G] ' or '     ') .. 'IID ' .. iid
+            if imgui.Button(lbl, imgui.ImVec2(-1, 30*MDS)) then
                 filterIID[0] = (filterIID[0] == iid) and -1 or iid
             end
             imgui.PopStyleColor(2)
 
-            -- Счётчик пакетов под кнопкой
             if fMono then imgui.PushFont(fMono) end
             imgui.PushStyleColor(imgui.Col.Text, C_MUTED)
-            imgui.Text(string.format('  %d пакет(ов)', info.count))
+            imgui.Text('  x' .. info.count
+                .. (info.isGame and '  <-- GAME' or ''))
             imgui.PopStyleColor()
             if fMono then imgui.PopFont() end
             imgui.Spacing()
@@ -253,14 +315,13 @@ imgui.OnFrame(
 
         -- ПРАВАЯ ПАНЕЛЬ — поток пакетов
         imgui.BeginChild('##right', imgui.ImVec2(rightW, bodyH), true)
-
         if fMono then imgui.PushFont(fMono) end
 
         local fi = filterIID[0]
         for _, e in ipairs(entries) do
             if fi == -1 or e.iid == fi then
 
-                -- Игровой пакет — яркий заголовок
+                -- Зелёная полоска для игровых пакетов
                 if e.isGame then
                     local dl = imgui.GetWindowDrawList()
                     local cp = imgui.GetCursorScreenPos()
@@ -269,17 +330,16 @@ imgui.OnFrame(
                     dl:AddRectFilled(
                         imgui.ImVec2(cp.x,      cp.y),
                         imgui.ImVec2(cp.x + cw, cp.y + hh),
-                        0xFF0F3518, 3*MDS)
+                        0xFF0D3014, 3*MDS)
                     dl:AddRectFilled(
-                        imgui.ImVec2(cp.x,           cp.y),
-                        imgui.ImVec2(cp.x + 3*MDS,   cp.y + hh),
+                        imgui.ImVec2(cp.x,          cp.y),
+                        imgui.ImVec2(cp.x + 3*MDS,  cp.y + hh),
                         0xFF40E060, 2*MDS)
                     imgui.Dummy(imgui.ImVec2(cw, hh))
                     imgui.SetCursorScreenPos(
                         imgui.ImVec2(cp.x + 8*MDS, cp.y + (hh - 12*MDS)/2))
-
                     imgui.PushStyleColor(imgui.Col.Text, C_GAME)
-                    imgui.Text('[GAME]')
+                    imgui.Text(S.game_tag)
                     imgui.PopStyleColor()
                     imgui.SameLine()
                 end
@@ -293,7 +353,7 @@ imgui.OnFrame(
                 -- Направление
                 imgui.PushStyleColor(imgui.Col.Text,
                     e.dir == 'IN' and C_IN or C_OUT)
-                imgui.Text(e.dir == 'IN' and '[IN ]' or '[OUT]')
+                imgui.Text(e.dir == 'IN' and S.pkt_in or S.pkt_out)
                 imgui.PopStyleColor()
                 imgui.SameLine()
 
@@ -305,8 +365,9 @@ imgui.OnFrame(
                 -- Данные
                 if e.data ~= '' then
                     imgui.PushStyleColor(imgui.Col.Text, C_DATA)
-                    imgui.PushTextWrapPos(imgui.GetCursorPosX() + rightW - 16*MDS)
-                    imgui.Text('  ' .. e.data:sub(1, 300))
+                    imgui.PushTextWrapPos(
+                        imgui.GetCursorPosX() + rightW - 14*MDS)
+                    imgui.Text('  ' .. e.data:sub(1, 500))
                     imgui.PopTextWrapPos()
                     imgui.PopStyleColor()
                 end
@@ -317,7 +378,6 @@ imgui.OnFrame(
 
         if fMono then imgui.PopFont() end
         if autoScroll[0] then imgui.SetScrollHereY(1.0) end
-
         imgui.EndChild()
 
         if fMain then imgui.PopFont() end
@@ -368,7 +428,6 @@ addEventHandler('onSendPacket', function(pid, bs)
             extra = extra .. ' | ' .. d:sub(1, 200)
         end
     end
-
     addEntry('OUT', iid, extra)
 end)
 
@@ -401,10 +460,14 @@ function main()
     end)
 
     sampRegisterChatCommand('ilclear', function()
-        entries  = {}
-        iidInfo  = {}
+        entries = {}
+        iidInfo = {}
         filterIID[0] = -1
-        sampAddChatMessage('{00FFCC}[IL] Лог очищен.', -1)
+        sampAddChatMessage('{AAAAAA}[IL] Log cleared.', -1)
+    end)
+
+    sampRegisterChatCommand('ilsave', function()
+        saveLog()
     end)
 
     sampRegisterChatCommand('ilsend', function(args)
@@ -415,12 +478,12 @@ function main()
         end
         sendClick(tonumber(iid), tonumber(bid), tonumber(sub),
             data ~= '' and data or nil)
-        sampAddChatMessage('{CC44FF}[IL] Отправлено IID=' .. iid
+        sampAddChatMessage('{CC44FF}[IL] Sent IID=' .. iid
             .. ' bid=' .. bid .. ' sub=' .. sub, -1)
     end)
 
     sampAddChatMessage(
-        '{00FFCC}[IL v4]{FFFFFF} /il — окно | /ilclear — очистить | /ilsend <iid> <bid> <sub> [data]',
+        '{00FFCC}[IL v4]{FFFFFF} /il | /ilclear | /ilsave | /ilsend <iid> <bid> <sub> [data]',
         -1)
 
     while true do wait(0) end
