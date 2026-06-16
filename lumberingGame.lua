@@ -1,8 +1,20 @@
 -- lumberingGame.lua — Monetloader port
 
-local rageMode = false -- true = клик в центр без задержки (100%), false = расчётный тайминг
+local rageMode = false -- true = мгновенный клик в центр (100%), false = расчётный тайминг
 
 local started = false
+
+-- Извлекаем числовые поля из JSON строкой без json-модуля
+local function parseGameData(str)
+    local function num(k)
+        return tonumber(str:match('"' .. k .. '"%s*:%s*([%-?%d%.]+)'))
+    end
+    if num('isMyState') ~= 1       then return nil end
+    if num('currentPosition') ~= -1 then return nil end
+    local s, w, sp = num('start'), num('width'), num('speed')
+    if not s or not w or not sp    then return nil end
+    return { start = s, width = w, speed = sp }
+end
 
 local function sendClick(iid, text)
     local bs = raknetNewBitStream()
@@ -34,16 +46,8 @@ addEventHandler('onReceivePacket', function(pid, bs)
     local od, jsonStr = pcall(raknetBitStreamReadString, bs, len)
     if not od or not jsonStr then return end
 
-    local ok, data = pcall(json.decode, jsonStr)
-    if not ok or type(data) ~= 'table' then return end
-
-    local gameData = data[1]
-    if type(gameData) ~= 'table' then return end
-    if gameData.isMyState ~= 1 then return end
-    if type(gameData.infoUser) ~= 'table' then return end
-    if gameData.infoUser[1].currentPosition ~= -1 then return end
-    if not gameData.start or not gameData.width or not gameData.speed then return end
-    if started then return end
+    local gameData = parseGameData(jsonStr)
+    if not gameData or started then return end
 
     thread.create(function()
         local pos = math.floor(gameData.start + gameData.width / 2 + 0.5)
