@@ -680,9 +680,11 @@ local function buildRoute(px, py, pz)
                 local pathLen=0
                 for i=2,#path do local a,b=path[i-1],path[i]; pathLen=pathLen+math.sqrt((b.x-a.x)^2+(b.y-a.y)^2) end
                 local directDist=math.sqrt((cpX-px)^2+(cpY-py)^2)
-                -- reject the navmesh route if it is a noticeable detour vs. the
-                -- straight-line distance -> fall back to the short direct path
-                if pathLen>directDist*1.6 then ap_path=nil; ap_useNavPath=false
+                -- Strongly prefer the short direct route: only use the navmesh
+                -- route when it is barely longer than the straight-line distance.
+                -- This stops the truck from looping around the block when going
+                -- straight is clearly the better way.
+                if pathLen>directDist*1.3 then ap_path=nil; ap_useNavPath=false
                 else ap_path=path; ap_path_idx=1; ap_useNavPath=true end
             else ap_path=nil; ap_useNavPath=false end
             ap_building=false
@@ -693,26 +695,8 @@ end
 local gps_path=nil; local gps_building=false; local gps_pending=false; local gps_draw_idx=1
 
 local function buildGpsRoute(px, py)
-    if gps_building then return end
-    if not nav_loaded then gps_pending=true; return end
-    gps_building=true; gps_path=nil; gps_pending=false; gps_draw_idx=1
-    lua_thread.create(function()
-        local sid=findNearestNode(px,py); local gid=findNearestNode(cpX,cpY)
-        if not sid or not gid then gps_building=false; return end
-        aStarAsync(sid, gid, function(path)
-            if path and #path>0 then
-                path[#path+1]={x=cpX,y=cpY,z=cpZ}
-                -- mirror the autopilot's detour rejection so the drawn GPS line
-                -- matches the route the truck will actually take (a straight
-                -- line when the navmesh route would be a needless loop)
-                local pathLen=0
-                for i=2,#path do local a,b=path[i-1],path[i]; pathLen=pathLen+math.sqrt((b.x-a.x)^2+(b.y-a.y)^2) end
-                local directDist=math.sqrt((cpX-px)^2+(cpY-py)^2)
-                if pathLen>directDist*1.6 then gps_path=nil else gps_path=path end
-            else gps_path=nil end
-            gps_building=false
-        end)
-    end)
+    -- GPS line is drawn as a clean direct line now, so no A* route is needed
+    gps_path=nil; gps_pending=false; gps_building=false
 end
 
 lua_thread.create(function()
@@ -1104,27 +1088,30 @@ imgui.OnFrame(
             originX = sw * 0.5; originY = sh * 0.78
         end
 
-        -- draw the actual A* route if one was built; otherwise fall back to a
-        -- straight line toward the checkpoint
-        local drewRoute = false
-        if gps_path and #gps_path > 1 then
-            local prevX, prevY = originX, originY
-            local havePrev = true
-            for _, wp in ipairs(gps_path) do
-                local sxN, syN = proj(wp.x, wp.y, (wp.z or pz) + 1.0)
+        -- Clean GPS line straight toward the checkpoint, subdivided so it drapes
+        -- along the ground instead of zig-zagging. The noisy navmesh polyline is
+        -- no longer drawn, and this matches the short direct route the autopilot
+        -- actually takes.
+        local dxc, dyc = cpX - px, cpY - py
+        local total = math.sqrt(dxc*dxc + dyc*dyc)
+        local prevX, prevY = originX, originY
+        local havePrev = true
+        if total > 1 then
+            local steps = math.min(40, math.max(1, math.floor(total / 8)))
+            for s = 1, steps do
+                local t  = s / steps
+                local wx = px + dxc * t
+                local wy = py + dyc * t
+                local wz = pz + (cpZ - pz) * t + 1.0
+                local sxN, syN = proj(wx, wy, wz)
                 if sxN and havePrev then
                     dl:AddLine(imgui.ImVec2(prevX, prevY), imgui.ImVec2(sxN, syN), colLine, lw)
                 end
-                if sxN then prevX, prevY = sxN, syN; havePrev = true
-                else havePrev = false end
+                if sxN then prevX, prevY = sxN, syN; havePrev = true else havePrev = false end
             end
-            drewRoute = true
         end
 
         local sx2, sy2 = proj(cpX, cpY, cpZ + 1.5)
-        if sx2 and not drewRoute then
-            dl:AddLine(imgui.ImVec2(originX, originY), imgui.ImVec2(sx2, sy2), colLine, lw)
-        end
         dl:AddCircle(imgui.ImVec2(originX, originY), 5*MDS, colRed, 16, lw)
         dl:AddCircleFilled(imgui.ImVec2(originX, originY), 2.5*MDS, colRed, 16)
         if sx2 then
