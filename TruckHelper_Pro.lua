@@ -18,6 +18,17 @@ local IS_MOBILE = MONET_VERSION ~= nil
 local MDS = IS_MOBILE and MONET_DPI_SCALE or 1.0
 local sw, sh = getScreenResolution()
 
+-- some SAMP helpers do not exist on every (mobile/MonetLoader) build, so call
+-- them safely and just report "not active" when they are missing
+local function safeBool(fn)
+    if type(fn) ~= 'function' then return false end
+    local ok, r = pcall(fn)
+    if ok and r then return true end
+    return false
+end
+local function isChatActive()   return safeBool(sampIsChatInputActive) end
+local function isDialogActive() return safeBool(sampIsDialogActive)   end
+
 local _openLink = nil
 pcall(function()
     local gta = ffi.load('GTASA')
@@ -47,7 +58,7 @@ local LIC_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1P5Hjo_x1Ybp_S9tmy
 local ini
 
 local licenseKey      = ''
-local licenseOK       = false
+local licenseOK       = true   -- license system disabled: all features unlocked
 local licenseChecking = false
 local licenseMsg      = ''
 local licWinOpen      = imgui.new.bool(false)
@@ -2029,11 +2040,9 @@ function main()
 
     notify('v2.0 PRO \xe7\xe0\xe3\xf0\xf3\xe6\xe5\xed! /truck - \xec\xe5\xed\xfe')
 
-    if licenseKey and #licenseKey > 3 then
-        checkLicenseAsync(licenseKey, true, false)
-    else
-        licWinOpen[0] = true
-    end
+    -- license system disabled: everything is unlocked, no key required
+    licenseOK = true
+    licWinOpen[0] = false
 
     lua_thread.create(function()
         while not doesFileExist(NAV_PATH) do
@@ -2099,8 +2108,8 @@ function main()
     end)
 
     while true do
-        local inChat   = sampIsChatInputActive()
-        local inDialog = sampIsDialogActive()
+        local inChat   = isChatActive()
+        local inDialog = isDialogActive()
         local inMenu   = menuOpen[0]
         local inCar    = isCharInAnyCar(PLAYER_PED)
 
