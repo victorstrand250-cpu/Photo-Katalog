@@ -1,38 +1,26 @@
 -- lumberingGame.lua — Monetloader port
--- Умный режим: /lscan → играй мини-игру → бот находит пакет с параметрами → считает тайминг сам
--- Ручной режим: /lumber (с текущим TIMING)
+-- Автоматизация мини-игры лесоповала на Arizona RP Mobile
 --
--- /lscan         -- включить/выключить сканер пакетов (вкл перед игрой)
--- /lumber        -- ручной старт последовательности
--- /ltiming N     -- задать фиксированную задержку (мс)
+-- /lumber        — запустить последовательность (если интерфейс уже открыт)
+-- /ltiming N     — задать задержку мс (подбирается вручную)
+-- /lscan         — включить/выключить умный сканер (работает если сервер шлёт JSON)
+--
+-- Как подобрать тайминг:
+--   1. /lumber → смотри в чат УСПЕХ/ПРОМАХ
+--   2. Если ПРОМАХ — попробуй /ltiming 800 или /ltiming 1200
+--   3. Повторяй пока не будет УСПЕХ
+--   4. Запомни это значение
 
 local IID    = 8
-local TIMING = 1000  -- фиксированная задержка (мс), используется если сканер не нашёл данные
+local TIMING = 1000  -- задержка между START и STOP (мс)
 
-local running   = false
-local triggered = false
-local scanning  = false
-
--- Параметры игры (если нашли через сканер)
-local calcTiming = nil  -- nil = использовать TIMING
+local running    = false
+local triggered  = false
+local scanning   = false
+local calcTiming = nil  -- nil = используем TIMING
 
 -- ===================================================
---  ОТПРАВКА КЛИКА
--- ===================================================
-local function click(bid)
-    local bs = raknetNewBitStream()
-    raknetBitStreamWriteInt8(bs,  220)
-    raknetBitStreamWriteInt8(bs,  63)
-    raknetBitStreamWriteInt8(bs,  IID)
-    raknetBitStreamWriteInt32(bs, bid)
-    raknetBitStreamWriteInt32(bs, bid)
-    raknetBitStreamWriteInt32(bs, 0)
-    raknetSendBitStreamEx(bs, 1, 10, 1)
-    raknetDeleteBitStream(bs)
-end
-
--- ===================================================
---  ЧТЕНИЕ СЫРЫХ БАЙТ ИЗ БИТСТРИМА
+--  ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 -- ===================================================
 local function readRaw(bs, maxBytes)
     local t = {}
@@ -49,7 +37,41 @@ local function numField(str, key)
 end
 
 -- ===================================================
---  СКАНЕР: ищем пакет с isMyState в ЛЮБОМ пакете
+--  РЕЗУЛЬТАТ МИНИ-ИГРЫ (success / fail)
+--  Пакет: pid=220, b1=84, IID=8 → JSON [{"chance":N,"success":0|1}]
+-- ===================================================
+addEventHandler('onReceivePacket', function(pid, bs)
+    if pid ~= 220 then return end
+    raknetBitStreamSetReadOffset(bs, 0)
+    pcall(raknetBitStreamReadInt8, bs)                   -- пропускаем byte pid
+    local ok1, b1  = pcall(raknetBitStreamReadInt8, bs)
+    if not ok1 or b1 ~= 84 then return end               -- b1=84 FM
+    local ok2, iid = pcall(raknetBitStreamReadInt8, bs)
+    if not ok2 or iid ~= IID then return end              -- наш IID
+
+    local raw     = readRaw(bs, 150)
+    local success = numField(raw, 'success')
+    if success == nil then return end
+
+    local chance  = numField(raw, 'chance') or 0
+    local usedT   = calcTiming or TIMING
+
+    if success == 1 then
+        sampAddChatMessage(string.format(
+            '{2ECC71}[LumberBot] УСПЕХ! chance=%d%% тайминг=%dмс',
+            chance, usedT), -1)
+    else
+        sampAddChatMessage(string.format(
+            '{FF4444}[LumberBot] ПРОМАХ! chance=%d%% тайминг=%dмс',
+            chance, usedT), -1)
+        sampAddChatMessage('{FFAA00}  Попробуй /ltiming ' .. math.floor(usedT * 0.85) ..
+            ' или /ltiming ' .. math.floor(usedT * 1.15), -1)
+    end
+end)
+
+-- ===================================================
+--  УМНЫЙ СКАНЕР: ищем JSON с isMyState в любом пакете
+--  Работает на ПК с arizona-events. На мобиле — запасной вариант.
 -- ===================================================
 addEventHandler('onReceivePacket', function(pid, bs)
     if not scanning or running then return end
@@ -57,8 +79,6 @@ addEventHandler('onReceivePacket', function(pid, bs)
 
     local raw = readRaw(bs, 256)
     if not raw:find('"isMyState"') then return end
-
-    -- Нашли! Проверяем что это наш ход и начало игры
     if numField(raw, 'isMyState') ~= 1 then return end
     if numField(raw, 'currentPosition') ~= -1 then return end
 
@@ -67,44 +87,57 @@ addEventHandler('onReceivePacket', function(pid, bs)
     local sp = numField(raw, 'speed')
 
     if not s or not w or not sp then
-        -- Данные есть но не распарсились — логируем для отладки
-        sampAddChatMessage('{FFAA00}[LumberBot] Found packet pid=' .. pid
-            .. ' but could not parse. Raw: ' .. raw:sub(1, 120), -1)
+        sampAddChatMessage('{FFAA00}[LumberBot] Пакет найден, параметры не распознаны', -1)
+        sampAddChatMessage('{AAAAAA}raw: ' .. raw:sub(1, 100), -1)
         return
     end
 
-    -- Считаем тайминг как оригинальный PC скрипт
-    local pos  = math.floor(s + w / 2 + 0.5)
-    local pct  = math.floor((pos - s) / w * 100 + 0.5)
+    local pos = math.floor(s + w / 2 + 0.5)
     calcTiming = math.floor(pos / sp + 0.5) * 75
 
     sampAddChatMessage(string.format(
-        '{00FF80}[LumberBot] FOUND pid=%d  start=%.1f width=%.1f speed=%.2f  timing=%dms pos=%d(%d%%)',
-        pid, s, w, sp, calcTiming, pos, pct), -1)
+        '{00FF80}[LumberBot] АВТО: start=%.1f w=%.1f sp=%.2f → %dмс',
+        s, w, sp, calcTiming), -1)
 
     scanning  = false
-    triggered = true  -- сразу запускаем
+    triggered = true
 end)
 
 -- ===================================================
---  АВТО-ТРИГГЕР: TOGGLE ON (b1=62) на IID=8
--- (запасной, если сканер не поймал пакет до старта)
+--  АВТО-ТРИГГЕР через TOGGLE ON (b1=62) для IID=8
+--  Срабатывает когда сервер открывает интерфейс лесоповала
 -- ===================================================
 addEventHandler('onReceivePacket', function(pid, bs)
     if pid ~= 220 or running or scanning then return end
     raknetBitStreamSetReadOffset(bs, 0)
-    local ok0, _    = pcall(raknetBitStreamReadInt8, bs)
-    local ok1, b1   = pcall(raknetBitStreamReadInt8, bs)
-    if not ok0 or not ok1 or b1 ~= 62 then return end
+    pcall(raknetBitStreamReadInt8, bs)                   -- skip pid byte
+    local ok1, b1    = pcall(raknetBitStreamReadInt8, bs)
+    if not ok1 or b1 ~= 62 then return end               -- b1=62 TOGGLE
+    local ok2, iid   = pcall(raknetBitStreamReadInt8, bs)
+    if not ok2 or iid ~= IID then return end
+    local ok3, state = pcall(raknetBitStreamReadBool, bs)
+    if not ok3 or not state then return end               -- state=true → ON
 
-    local oi, iid   = pcall(raknetBitStreamReadInt8, bs)
-    local ob, state = pcall(raknetBitStreamReadBool, bs)
-    if not oi or iid ~= IID then return end
-    if not ob or not state then return end
-
-    calcTiming = nil  -- сброс: использовать фиксированный TIMING
+    calcTiming = nil
     triggered  = true
+    sampAddChatMessage('{00FFCC}[LumberBot] Интерфейс открыт → старт через ' ..
+        (calcTiming or TIMING) .. 'мс', -1)
 end)
+
+-- ===================================================
+--  ОТПРАВКА КЛИКА
+-- ===================================================
+local function click(bid)
+    local bs = raknetNewBitStream()
+    raknetBitStreamWriteInt8(bs,  220)
+    raknetBitStreamWriteInt8(bs,   63)
+    raknetBitStreamWriteInt8(bs,  IID)
+    raknetBitStreamWriteInt32(bs, bid)
+    raknetBitStreamWriteInt32(bs, bid)
+    raknetBitStreamWriteInt32(bs,   0)
+    raknetSendBitStreamEx(bs, 1, 10, 1)
+    raknetDeleteBitStream(bs)
+end
 
 -- ===================================================
 --  MAIN
@@ -115,48 +148,51 @@ function main()
     sampRegisterChatCommand('lscan', function()
         scanning = not scanning
         calcTiming = nil
-        if scanning then
-            sampAddChatMessage('{00FFCC}[LumberBot] Scanner ON — начинай мини-игру!', -1)
-        else
-            sampAddChatMessage('{AAAAAA}[LumberBot] Scanner OFF', -1)
-        end
+        sampAddChatMessage(
+            scanning and '{00FFCC}[LumberBot] Сканер ВКЛ — начни мини-игру!'
+                      or '{AAAAAA}[LumberBot] Сканер ВЫКЛ', -1)
     end)
 
     sampRegisterChatCommand('lumber', function()
         if running then
-            sampAddChatMessage('{FF4444}[LumberBot] Already running!', -1)
+            sampAddChatMessage('{FF4444}[LumberBot] Уже выполняется!', -1)
             return
         end
         calcTiming = nil
         triggered  = true
-        sampAddChatMessage('{2ECC71}[LumberBot] Manual start (timing=' .. TIMING .. 'ms)', -1)
+        sampAddChatMessage('{2ECC71}[LumberBot] Ручной старт! Тайминг=' .. TIMING .. 'мс', -1)
     end)
 
     sampRegisterChatCommand('ltiming', function(args)
         local n = tonumber(args)
         if not n or n < 50 then
-            sampAddChatMessage('{FF4444}[LumberBot] /ltiming <ms>', -1)
+            sampAddChatMessage('{FF4444}[LumberBot] Использование: /ltiming <мс>  (мин 50)', -1)
+            sampAddChatMessage('{AAAAAA}  Текущий тайминг: ' .. TIMING .. 'мс', -1)
             return
         end
         TIMING = n
-        sampAddChatMessage('{2ECC71}[LumberBot] Fixed timing = ' .. n .. ' ms', -1)
+        sampAddChatMessage('{2ECC71}[LumberBot] Тайминг установлен: ' .. n .. 'мс', -1)
     end)
 
     sampAddChatMessage(
-        '{2ECC71}[LumberBot]{FFFFFF} /lscan — умный режим | /lumber — ручной | /ltiming <мс>',
-        -1)
+        '{2ECC71}[LumberBot]{FFFFFF} /lumber | /ltiming <мс> | /lscan', -1)
+    sampAddChatMessage(
+        '{AAAAAA}Авто-режим: подходи к бревну — бот сам нажмёт старт/стоп', -1)
 
     while true do
         if triggered and not running then
             triggered  = false
             running    = true
             local t    = calcTiming or TIMING
-            click(90)
+
+            sampAddChatMessage('{00FFCC}[LumberBot] Клик START...', -1)
+            click(90)       -- START
             wait(t)
-            click(91)
-            wait(4000)
-            click(92)
+            click(91)       -- STOP
+            wait(4000)      -- ждём анимацию результата
+            click(92)       -- CLOSE
             wait(500)
+
             running    = false
             calcTiming = nil
         end
