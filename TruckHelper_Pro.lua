@@ -669,7 +669,9 @@ local function buildRoute(px, py, pz)
                 local pathLen=0
                 for i=2,#path do local a,b=path[i-1],path[i]; pathLen=pathLen+math.sqrt((b.x-a.x)^2+(b.y-a.y)^2) end
                 local directDist=math.sqrt((cpX-px)^2+(cpY-py)^2)
-                if pathLen>directDist*1.8 then ap_path=nil; ap_useNavPath=false
+                -- reject the navmesh route if it is a noticeable detour vs. the
+                -- straight-line distance -> fall back to the short direct path
+                if pathLen>directDist*1.6 then ap_path=nil; ap_useNavPath=false
                 else ap_path=path; ap_path_idx=1; ap_useNavPath=true end
             else ap_path=nil; ap_useNavPath=false end
             ap_building=false
@@ -687,7 +689,15 @@ local function buildGpsRoute(px, py)
         local sid=findNearestNode(px,py); local gid=findNearestNode(cpX,cpY)
         if not sid or not gid then gps_building=false; return end
         aStarAsync(sid, gid, function(path)
-            if path and #path>0 then path[#path+1]={x=cpX,y=cpY,z=cpZ}; gps_path=path
+            if path and #path>0 then
+                path[#path+1]={x=cpX,y=cpY,z=cpZ}
+                -- mirror the autopilot's detour rejection so the drawn GPS line
+                -- matches the route the truck will actually take (a straight
+                -- line when the navmesh route would be a needless loop)
+                local pathLen=0
+                for i=2,#path do local a,b=path[i-1],path[i]; pathLen=pathLen+math.sqrt((b.x-a.x)^2+(b.y-a.y)^2) end
+                local directDist=math.sqrt((cpX-px)^2+(cpY-py)^2)
+                if pathLen>directDist*1.6 then gps_path=nil else gps_path=path end
             else gps_path=nil end
             gps_building=false
         end)
@@ -897,10 +907,17 @@ local function doAutopilot()
             plannedKmh = math.max(8.0, safeMs*3.6)
         end
     else
-        -- direct mode (no nav path): hold a stable aim point on the checkpoint
-        local needUpdate=(ap_stableTargetX==nil) or math.abs(dist-ap_lastTargetUpdateDist)>10
-        if needUpdate then ap_lastTargetUpdateDist=dist; ap_stableTargetX=cpX; ap_stableTargetY=cpY; ap_stableTargetZ=cpZ end
-        targetX=ap_stableTargetX; targetY=ap_stableTargetY; targetZ=ap_stableTargetZ
+        -- direct mode (no usable road route): aim at a near rolling point straight
+        -- toward the checkpoint instead of the checkpoint itself. Handing the game
+        -- AI the far checkpoint makes it plan a long detour over road nodes (the
+        -- "drives 500 m around for a 50 m goal" problem); a near aim point forces
+        -- it to take the short, direct way while still avoiding local obstacles.
+        local dx=cpX-px; local dy=cpY-py; local L=math.sqrt(dx*dx+dy*dy)
+        if L>Ld then
+            targetX=px+dx/L*Ld; targetY=py+dy/L*Ld; targetZ=pz
+        else
+            targetX=cpX; targetY=cpY; targetZ=cpZ
+        end
     end
 
     -- final speed = min(user cap, curvature plan, approach taper, heading-error limit)
