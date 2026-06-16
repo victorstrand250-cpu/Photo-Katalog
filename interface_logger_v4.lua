@@ -167,9 +167,9 @@ imgui.OnFrame(
         self.HideCursor = false
         if fMain then imgui.PushFont(fMain) end
 
-        -- Окно почти на весь экран
+        -- Окно ~половина экрана
         imgui.SetNextWindowSize(
-            imgui.ImVec2(sw - 20, sh - 60),
+            imgui.ImVec2(sw * 0.5, sh * 0.5),
             imgui.Cond.FirstUseEver)
         imgui.SetNextWindowPos(
             imgui.ImVec2(sw/2, sh/2),
