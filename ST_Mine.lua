@@ -194,6 +194,9 @@ local mainIni = inicfg.load({
     ui = {
         hide_fab = "true"
     },
+    mask = {
+        auto = "false"
+    },
     sound = {
         eat = "true",
         aa = "true"
@@ -369,6 +372,10 @@ local aaLastQuestion = nil
 local aaLastTrigger = 0
 
 local fabHidden     = not (mainIni.ui and tostring(mainIni.ui.hide_fab) == 'false')
+
+autoMask     = (mainIni.mask and tostring(mainIni.mask.auto) == 'true')
+maskNextTime = 0
+
 local soundEatEnabled = not (mainIni.sound and tostring(mainIni.sound.eat) == 'false')
 local soundAAEnabled  = not (mainIni.sound and tostring(mainIni.sound.aa)  == 'false')
 
@@ -428,6 +435,8 @@ local function saveCfg()
     mainIni.goal.minutes     = tostring(goalMinutes)
     mainIni.goal.quit        = tostring(goalQuit)
     mainIni.ui.hide_fab          = tostring(fabHidden)
+    mainIni.mask = mainIni.mask or {}
+    mainIni.mask.auto            = tostring(autoMask)
     mainIni.protect.auto_reply   = tostring(aaState)
     mainIni.protect.stop_dialog  = tostring(stopOnDialog)
     mainIni.protect.stop_tp      = tostring(stopOnTp)
@@ -438,6 +447,16 @@ local function saveCfg()
     mainIni.sound.aa  = tostring(soundAAEnabled)
     inicfg.save(mainIni, 'mbot.ini')
 end
+
+lua_thread.create(function()
+    while true do
+        wait(1000)
+        if autoMask and isSampAvailable() and os.clock() >= maskNextTime then
+            sampSendChat('/mask')
+            maskNextTime = os.clock() + 20 * 60
+        end
+    end
+end)
 
 local function sprint_hook(thiz, playerid)
     if isRunning and playerid == 0 then
@@ -3698,6 +3717,13 @@ local function renderMainTab()
             rdl:AddText(imgui.ImVec2(fx + (fw-lds.x)/2, fy + fh/2 - 8),
                 u32(imgui.ImVec4(0.60,0.55,0.46,1)), ld)
             if mainFont then imgui.PopFont() end
+        end
+
+        imgui.SetCursorPos(imgui.ImVec2(c0.x, c0.y + fh + 12))
+        if imgui.Checkbox(u8"\xc0\xe2\xf2\xee-\xec\xe0\xf1\xea\xe0", imgui.new.bool(autoMask)) then
+            autoMask = not autoMask
+            saveCfg()
+            if autoMask then maskNextTime = 0 end
         end
     end
     imgui.EndChild()
