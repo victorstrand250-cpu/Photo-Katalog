@@ -373,8 +373,9 @@ local aaLastTrigger = 0
 
 local fabHidden     = not (mainIni.ui and tostring(mainIni.ui.hide_fab) == 'false')
 
-autoMask     = (mainIni.mask and tostring(mainIni.mask.auto) == 'true')
-maskNextTime = 0
+autoMask      = (mainIni.mask and tostring(mainIni.mask.auto) == 'true')
+maskNextTime  = 0
+maskConfirmed = false
 
 local soundEatEnabled = not (mainIni.sound and tostring(mainIni.sound.eat) == 'false')
 local soundAAEnabled  = not (mainIni.sound and tostring(mainIni.sound.aa)  == 'false')
@@ -452,7 +453,12 @@ lua_thread.create(function()
     while true do
         wait(1000)
         if autoMask and isSampAvailable() and os.clock() >= maskNextTime then
+            maskConfirmed = false
             sampSendChat('/mask')
+            wait(2000)
+            if not maskConfirmed then
+                sampSendChat('/mask')
+            end
             maskNextTime = os.clock() + 20 * 60
         end
     end
@@ -2972,6 +2978,10 @@ end)
 function sampev.onServerMessage(color, text)
     if not text then return end
     local txtClean = text:gsub('{%x%x%x%x%x%x}', '')
+
+    if txtClean:find('\xc2\xf0\xe5\xec\xff \xe4\xe5\xe9\xf1\xf2\xe2\xe8\xff \xec\xe0\xf1\xea\xe8', 1, true) then
+        maskConfirmed = true
+    end
 
     if aaAngry > 0 and os.clock() - aaLastTrigger > 300 then
         aaAngry = 0
