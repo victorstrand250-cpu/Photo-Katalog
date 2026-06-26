@@ -17,6 +17,43 @@ script_version("1.0")
 
 local sampev = require("lib.samp.events")
 
+-- ====================== Кодировка ======================
+-- Чат SA-MP/Monet работает в Windows-1251, а исходник в UTF-8.
+-- u2a переводит русский текст из UTF-8 в CP1251, чтобы в игре не было кракозябр.
+local function u2a(s)
+    local res = {}
+    local i, n = 1, #s
+    while i <= n do
+        local b = s:byte(i)
+        if b < 0x80 then
+            res[#res + 1] = string.char(b)
+            i = i + 1
+        elseif b == 0xD0 or b == 0xD1 then
+            local b2 = s:byte(i + 1) or 0
+            local cp = (b - 0xC0) * 64 + (b2 - 0x80) -- декод 2-байтного UTF-8
+            local out
+            if cp >= 0x410 and cp <= 0x44F then
+                out = cp - 0x410 + 0xC0 -- А-я
+            elseif cp == 0x401 then
+                out = 0xA8 -- Ё
+            elseif cp == 0x451 then
+                out = 0xB8 -- ё
+            else
+                out = 0x3F -- '?'
+            end
+            res[#res + 1] = string.char(out)
+            i = i + 2
+        else
+            res[#res + 1] = string.char(b)
+            i = i + 1
+        end
+    end
+    return table.concat(res)
+end
+
+-- CP1251-байт русской строчной 'к' (для компактного вывода 1кк/1ккк)
+local K_CP1251 = string.char(234)
+
 -- ====================== Парсер / вычислитель ======================
 
 -- Рекурсивный спуск. Грамматика:
@@ -30,7 +67,8 @@ local sampev = require("lib.samp.events")
 local function evaluate(src)
     local expr = src
     -- кириллические к/К -> латинская k (UTF-8 байты)
-    expr = expr:gsub("\208\186", "k"):gsub("\208\154", "k")
+    expr = expr:gsub("\208\186", "k"):gsub("\208\154", "k") -- UTF-8 к/К
+    expr = expr:gsub("\234", "k"):gsub("\202", "k") -- CP1251 к/К (как приходит из чата)
     -- запятая как десятичный разделитель
     expr = expr:gsub(",", ".")
     -- убираем пробелы
@@ -201,14 +239,15 @@ local function formatCompact(n)
         level = level + 1
     end
     local vs = string.format("%.3f", v):gsub("0+$", ""):gsub("%.$", "")
-    return (neg and "-" or "") .. vs .. string.rep("к", level)
+    return (neg and "-" or "") .. vs .. string.rep(K_CP1251, level)
 end
 
 -- ====================== Определение: это вычисление? ======================
 
 local function looksLikeMath(text)
     -- нормализуем как в evaluate, чтобы проверить набор символов
-    local e = text:gsub("\208\186", "k"):gsub("\208\154", "k")
+    local e = text:gsub("\208\186", "k"):gsub("\208\154", "k") -- UTF-8 к/К
+    e = e:gsub("\234", "k"):gsub("\202", "k") -- CP1251 к/К
     e = e:gsub(",", "."):gsub("%s+", "")
     if e == "" then
         return false
@@ -270,7 +309,7 @@ function main()
     end
     wait(1500)
     sampAddChatMessage(
-        "{00FF88}[Калькулятор]{FFFFFF} загружен. Пиши пример прямо в чат: {00FF88}50к + 30к{FFFFFF}, поддержка 1к/1кк/1ккк.",
+        u2a("{00FF88}[Калькулятор]{FFFFFF} загружен. Пиши пример прямо в чат: {00FF88}50к + 30к{FFFFFF}, поддержка 1к/1кк/1ккк."),
         COLOR
     )
     wait(-1)
