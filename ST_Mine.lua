@@ -1471,7 +1471,7 @@ local function isPointInZone(px, py, zone)
     return inside
 end
 
-local ORE_PLAYER_RADIUS = 3.0
+local ORE_PLAYER_RADIUS = 4.0
 
 local function dist3(x1, y1, z1, x2, y2, z2)
     local dx, dy, dz = x2 - x1, y2 - y1, z2 - z1
