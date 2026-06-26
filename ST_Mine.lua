@@ -1615,10 +1615,9 @@ function oreScanThread()
             if #allOres > 0 then allOres = {} end
             nearestOrePos = nil
             currentTracerOre = nil
-            goto continue_scan
-        end
+        else
         local ok2, myX, myY, myZ = pcall(getCharCoordinates, PLAYER_PED)
-        if not ok2 then goto continue_scan end
+        if ok2 then
         local nearbyOres = {}
         for i = 0, 2048 do
             if i > 0 and i % 160 == 0 then wait(0) end
@@ -1755,7 +1754,8 @@ function oreScanThread()
             currentTracerOre = nil
             _nextTarget = nil
         end
-        ::continue_scan::
+        end
+        end
     end
 end
 
