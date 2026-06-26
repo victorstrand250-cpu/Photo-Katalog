@@ -1,31 +1,9 @@
--- Калькулятор для MonetLoader / MoonLoader (SA-MP)
--- Пишешь выражение прямо в чат -> получаешь ответ. Без команд.
---
--- Форматы количества:
---   1к / 1k   = 1 000          (можно подряд: 1кк = 1 000 000, 1ккк = 1 000 000 000)
---   1м / 1m   = 1 000 000      (млн, то же что кк)
---   1б / 1b   = 1 000 000 000  (млрд, то же что ккк)
---
--- Операции: + - * / ^ ( ) , десятичные числа.
--- Проценты: 1кк + 15% -> 1.15кк, 2кк - 7% -> 1.86кк, 500к * 50% -> 250к.
---
--- Память (копилка для фарма) — включается только если сам поставишь #:
---   2+2#      посчитать и ПРИБАВИТЬ результат к памяти
---   #         показать, сколько сейчас в памяти
---   #0        обнулить память (любой текст после # = сброс)
---
--- Команда:
---   /calc     включить / выключить калькулятор
-
 script_name("Калькулятор сумм")
-script_author("Photo-Katalog")
+script_author("Victor Strand")
 script_version("2.0")
 
 local sampev = require("lib.samp.events")
 
--- ====================== Кодировка ======================
--- Чат SA-MP/Monet работает в Windows-1251, а исходник в UTF-8.
--- u2a переводит русский текст из UTF-8 в CP1251, чтобы в игре не было кракозябр.
 local function u2a(s)
     local res = {}
     local i, n = 1, #s
@@ -36,16 +14,16 @@ local function u2a(s)
             i = i + 1
         elseif b == 0xD0 or b == 0xD1 then
             local b2 = s:byte(i + 1) or 0
-            local cp = (b - 0xC0) * 64 + (b2 - 0x80) -- декод 2-байтного UTF-8
+            local cp = (b - 0xC0) * 64 + (b2 - 0x80)
             local out
             if cp >= 0x410 and cp <= 0x44F then
-                out = cp - 0x410 + 0xC0 -- А-я
+                out = cp - 0x410 + 0xC0
             elseif cp == 0x401 then
-                out = 0xA8 -- Ё
+                out = 0xA8
             elseif cp == 0x451 then
-                out = 0xB8 -- ё
+                out = 0xB8
             else
-                out = 0x3F -- '?'
+                out = 0x3F
             end
             res[#res + 1] = string.char(out)
             i = i + 2
@@ -57,38 +35,21 @@ local function u2a(s)
     return table.concat(res)
 end
 
--- CP1251-байт русской строчной 'к' (для компактного вывода 1кк/1ккк)
 local K_CP1251 = string.char(234)
 
--- ====================== Нормализация ввода ======================
--- Приводит выражение к виду, который понимает парсер:
--- русские/латинские суффиксы -> k, запятая -> точка, убирает пробелы.
 local function normalize(s)
-    -- к / К  (UTF-8 и CP1251) + латинская K
-    s = s:gsub("\208\186", "k"):gsub("\208\154", "k") -- UTF-8 к/К
-    s = s:gsub("\234", "k"):gsub("\202", "k") -- CP1251 к/К
+    s = s:gsub("\208\186", "k"):gsub("\208\154", "k")
+    s = s:gsub("\234", "k"):gsub("\202", "k")
     s = s:gsub("K", "k")
-    -- млн: м / М -> kk
-    s = s:gsub("\208\188", "kk"):gsub("\208\156", "kk") -- UTF-8 м/М
-    s = s:gsub("\236", "kk"):gsub("\204", "kk") -- CP1251 м/М
-    s = s:gsub("[mM]", "kk") -- латинская m/M
-    -- млрд: б / Б -> kkk
-    s = s:gsub("\208\177", "kkk"):gsub("\208\145", "kkk") -- UTF-8 б/Б
-    s = s:gsub("\225", "kkk"):gsub("\193", "kkk") -- CP1251 б/Б
-    s = s:gsub("[bB]", "kkk") -- латинская b/B
-    -- запятая как десятичный разделитель + убрать пробелы
+    s = s:gsub("\208\188", "kk"):gsub("\208\156", "kk")
+    s = s:gsub("\236", "kk"):gsub("\204", "kk")
+    s = s:gsub("[mM]", "kk")
+    s = s:gsub("\208\177", "kkk"):gsub("\208\145", "kkk")
+    s = s:gsub("\225", "kkk"):gsub("\193", "kkk")
+    s = s:gsub("[bB]", "kkk")
     s = s:gsub(",", "."):gsub("%s+", "")
     return s
 end
-
--- ====================== Парсер / вычислитель ======================
--- Рекурсивный спуск. Возвращают (значение, это_процент?).
---   expr   := term  (('+' | '-') term)*
---   term   := factor (('*' | '/') factor)*
---   factor := ('+' | '-') factor | primary ('^' factor)?
---   primary:= number | '(' expr ')' ['%']
---   number := digits['.'digits] ('k')* ['%']
--- Процент: a + b% = a + a*b/100 ; a - b% = a - a*b/100 ; a * b% = a*b/100 ; b% = b/100.
 
 local function evaluate(src)
     local expr = normalize(src)
@@ -109,7 +70,7 @@ local function evaluate(src)
         return c >= "0" and c <= "9"
     end
 
-    local parseExpr -- forward
+    local parseExpr
 
     local function readNumber()
         local start = pos
@@ -124,7 +85,7 @@ local function evaluate(src)
         end
         local value = tonumber(numstr)
         if not value then error("number") end
-        while peek() == "k" do -- суффиксы к/k/м/б развёрнуты в k
+        while peek() == "k" do
             advance()
             value = value * 1000
         end
@@ -224,21 +185,18 @@ local function evaluate(src)
         if pos <= len then
             error("trailing")
         end
-        if p then -- одиночный процент, напр. 15% -> 0.15
+        if p then
             v = v / 100
         end
         return v
     end)
 
-    if ok and type(result) == "number" and result == result then -- not NaN
+    if ok and type(result) == "number" and result == result then
         return result
     end
     return nil
 end
 
--- ====================== Форматирование ======================
-
--- 1234567 -> "1 234 567"
 local function formatThousands(n)
     local neg = n < 0
     n = math.abs(n)
@@ -259,7 +217,6 @@ local function formatThousands(n)
     return out
 end
 
--- 3000000 -> "3кк", 1250000000 -> "1.25ккк" (до 2 знаков)
 local function formatCompact(n)
     local neg = n < 0
     n = math.abs(n)
@@ -277,8 +234,6 @@ local function formatCompact(n)
     return (neg and "-" or "") .. vs .. string.rep(K_CP1251, level)
 end
 
--- ====================== Определение: это вычисление? ======================
-
 local function looksLikeMath(text)
     local e = normalize(text)
     if e == "" then
@@ -290,14 +245,11 @@ local function looksLikeMath(text)
     if not e:find("%d") then
         return false
     end
-    -- нужен оператор / процент / скобка / суффикс k (иначе "500" не трогаем)
     if e:find("[%+%-%*/%%%^]") or e:find("k") or e:find("[%(%)]") then
         return true
     end
     return false
 end
-
--- ====================== Состояние ======================
 
 local COLOR = 0x00FF88
 local enabled = true
@@ -307,16 +259,13 @@ local function chat(s)
     sampAddChatMessage(u2a(s), COLOR)
 end
 
--- ====================== Хук чата ======================
-
 function sampev.onSendChat(text)
     if not enabled then
-        return -- калькулятор выключен -> всё уходит в чат как есть
+        return
     end
 
     local trimmed = text:gsub("^%s+", ""):gsub("%s+$", "")
 
-    -- управление памятью ведущим символом #
     if trimmed:sub(1, 1) == "#" then
         if #trimmed == 1 then
             chat(string.format("{00FF88}[Память]{FFFFFF} сейчас: {FFD700}%s {888888}(%s)",
@@ -328,7 +277,6 @@ function sampev.onSendChat(text)
         return false
     end
 
-    -- маркер # в конце = прибавить результат к памяти
     local addMem = false
     local exprText = trimmed
     if exprText:sub(-1) == "#" then
@@ -336,14 +284,13 @@ function sampev.onSendChat(text)
         exprText = exprText:sub(1, -2):gsub("%s+$", "")
     end
 
-    -- без # включаемся только на явно математических строках
     if not addMem and not looksLikeMath(exprText) then
         return
     end
 
     local result = evaluate(exprText)
     if result == nil then
-        return -- не разобрали -> не вмешиваемся
+        return
     end
 
     local full = formatThousands(result)
@@ -356,7 +303,6 @@ function sampev.onSendChat(text)
         line = string.format("{FFFFFF}%s {888888}= {00FF88}%s {888888}(%s)", exprText, full, compact)
     end
 
-    -- при делении подсказываем целую часть ("на сколько хватит")
     local norm = normalize(exprText)
     if norm:find("/") and result > 0 and math.abs(result - math.floor(result)) > 1e-9 then
         line = line .. string.format(" {888888}целых: {00FF88}%s", formatThousands(math.floor(result)))
@@ -369,15 +315,12 @@ function sampev.onSendChat(text)
 
     chat(line)
 
-    -- кладём числовой результат в буфер обмена (удобно вставлять обратно)
     pcall(function()
         setClipboardText(string.format("%.0f", math.floor(result + 0.5)))
     end)
 
-    return false -- не отправляем выражение на сервер
+    return false
 end
-
--- ====================== Точка входа ======================
 
 function main()
     while not isSampAvailable() do
@@ -389,12 +332,12 @@ function main()
         if enabled then
             chat("{00FF88}[Калькулятор]{FFFFFF} включён. Пиши примеры в чат.")
         else
-            chat("{FF5555}[Калькулятор]{FFFFFF} выключен. /calc — включить снова.")
+            chat("{FF5555}[Калькулятор]{FFFFFF} выключен. Напиши /calc чтобы включить снова.")
         end
     end)
 
     wait(1500)
-    chat("{00FF88}[Калькулятор]{FFFFFF} загружен. Примеры: {00FF88}50к+30к{FFFFFF}, {00FF88}1кк+15%{FFFFFF}. " ..
-        "Память: добавь {00FF88}#{FFFFFF} в конце. Вкл/выкл: {00FF88}/calc")
+    chat("{00FF88}[Калькулятор]{FFFFFF} загружен. Автор: {00FF88}Victor Strand")
+    chat("{FFFFFF}Примеры: {00FF88}50к+30к{FFFFFF}, {00FF88}1кк+15%{FFFFFF}. Память: {00FF88}#{FFFFFF}. Вкл/выкл: {00FF88}/calc")
     wait(-1)
 end
