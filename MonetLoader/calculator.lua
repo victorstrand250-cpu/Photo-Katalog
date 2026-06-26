@@ -1,19 +1,25 @@
 -- Калькулятор для MonetLoader / MoonLoader (SA-MP)
 -- Пишешь выражение прямо в чат -> получаешь ответ. Без команд.
--- Поддержка форматов: 1к = 1 000, 1кк = 1 000 000, 1ккк = 1 000 000 000 и т.д.
--- Удобно фармилам считать большие суммы.
 --
--- Примеры (просто напиши в чат и нажми отправить):
---   50к + 30к            -> 80 000 (80к)
---   1кк * 3              -> 3 000 000 (3кк)
---   (2ккк + 500кк) / 2   -> 1 250 000 000 (1.25ккк)
---   1.5кк - 250к         -> 1 250 000 (1.25кк)
+-- Форматы количества:
+--   1к / 1k   = 1 000          (можно подряд: 1кк = 1 000 000, 1ккк = 1 000 000 000)
+--   1м / 1m   = 1 000 000      (млн, то же что кк)
+--   1б / 1b   = 1 000 000 000  (млрд, то же что ккк)
 --
--- Поддерживаются: + - * / % ^ ( ) , десятичные числа, суффиксы к/k (можно подряд).
+-- Операции: + - * / ^ ( ) , десятичные числа.
+-- Проценты: 1кк + 15% -> 1.15кк, 2кк - 7% -> 1.86кк, 500к * 50% -> 250к.
+--
+-- Память (копилка для фарма) — включается только если сам поставишь #:
+--   2+2#      посчитать и ПРИБАВИТЬ результат к памяти
+--   #         показать, сколько сейчас в памяти
+--   #0        обнулить память (любой текст после # = сброс)
+--
+-- Команда:
+--   /calc     включить / выключить калькулятор
 
 script_name("Калькулятор сумм")
 script_author("Photo-Katalog")
-script_version("1.0")
+script_version("2.0")
 
 local sampev = require("lib.samp.events")
 
@@ -54,27 +60,41 @@ end
 -- CP1251-байт русской строчной 'к' (для компактного вывода 1кк/1ккк)
 local K_CP1251 = string.char(234)
 
--- ====================== Парсер / вычислитель ======================
+-- ====================== Нормализация ввода ======================
+-- Приводит выражение к виду, который понимает парсер:
+-- русские/латинские суффиксы -> k, запятая -> точка, убирает пробелы.
+local function normalize(s)
+    -- к / К  (UTF-8 и CP1251) + латинская K
+    s = s:gsub("\208\186", "k"):gsub("\208\154", "k") -- UTF-8 к/К
+    s = s:gsub("\234", "k"):gsub("\202", "k") -- CP1251 к/К
+    s = s:gsub("K", "k")
+    -- млн: м / М -> kk
+    s = s:gsub("\208\188", "kk"):gsub("\208\156", "kk") -- UTF-8 м/М
+    s = s:gsub("\236", "kk"):gsub("\204", "kk") -- CP1251 м/М
+    s = s:gsub("[mM]", "kk") -- латинская m/M
+    -- млрд: б / Б -> kkk
+    s = s:gsub("\208\177", "kkk"):gsub("\208\145", "kkk") -- UTF-8 б/Б
+    s = s:gsub("\225", "kkk"):gsub("\193", "kkk") -- CP1251 б/Б
+    s = s:gsub("[bB]", "kkk") -- латинская b/B
+    -- запятая как десятичный разделитель + убрать пробелы
+    s = s:gsub(",", "."):gsub("%s+", "")
+    return s
+end
 
--- Рекурсивный спуск. Грамматика:
+-- ====================== Парсер / вычислитель ======================
+-- Рекурсивный спуск. Возвращают (значение, это_процент?).
 --   expr   := term  (('+' | '-') term)*
---   term   := factor (('*' | '/' | '%') factor)*
---   factor := ('+' | '-') factor | power
---   power  := primary ('^' factor)?
---   primary:= number | '(' expr ')'
---   number := digits['.'digits] ('k')*      (каждая 'k' = умножить на 1000)
+--   term   := factor (('*' | '/') factor)*
+--   factor := ('+' | '-') factor | primary ('^' factor)?
+--   primary:= number | '(' expr ')' ['%']
+--   number := digits['.'digits] ('k')* ['%']
+-- Процент: a + b% = a + a*b/100 ; a - b% = a - a*b/100 ; a * b% = a*b/100 ; b% = b/100.
 
 local function evaluate(src)
-    local expr = src
-    -- кириллические к/К -> латинская k (UTF-8 байты)
-    expr = expr:gsub("\208\186", "k"):gsub("\208\154", "k") -- UTF-8 к/К
-    expr = expr:gsub("\234", "k"):gsub("\202", "k") -- CP1251 к/К (как приходит из чата)
-    -- запятая как десятичный разделитель
-    expr = expr:gsub(",", ".")
-    -- убираем пробелы
-    expr = expr:gsub("%s+", "")
-
-    if expr == "" then return nil end
+    local expr = normalize(src)
+    if expr == "" then
+        return nil
+    end
 
     local pos = 1
     local len = #expr
@@ -104,12 +124,16 @@ local function evaluate(src)
         end
         local value = tonumber(numstr)
         if not value then error("number") end
-        -- суффиксы к/k подряд: каждая = *1000
-        while peek() == "k" do
+        while peek() == "k" do -- суффиксы к/k/м/б развёрнуты в k
             advance()
             value = value * 1000
         end
-        return value
+        local pct = false
+        if peek() == "%" then
+            advance()
+            pct = true
+        end
+        return value, pct
     end
 
     local function parsePrimary()
@@ -119,7 +143,12 @@ local function evaluate(src)
             local v = parseExpr()
             if peek() ~= ")" then error("paren") end
             advance()
-            return v
+            local pct = false
+            if peek() == "%" then
+                advance()
+                pct = true
+            end
+            return v, pct
         elseif isDigit(c) or c == "." then
             return readNumber()
         else
@@ -131,65 +160,72 @@ local function evaluate(src)
         local c = peek()
         if c == "-" then
             advance()
-            return -parseFactor()
+            local v, p = parseFactor()
+            return -v, p
         elseif c == "+" then
             advance()
             return parseFactor()
         end
-        local base = parsePrimary()
+        local base, pct = parsePrimary()
         if peek() == "^" then
             advance()
             local exp = parseFactor()
-            return base ^ exp
+            return base ^ exp, false
         end
-        return base
+        return base, pct
     end
 
     local function parseTerm()
-        local v = parseFactor()
+        local v, pct = parseFactor()
         while true do
             local c = peek()
             if c == "*" then
                 advance()
-                v = v * parseFactor()
+                local r, rp = parseFactor()
+                v = rp and (v * r / 100) or (v * r)
+                pct = false
             elseif c == "/" then
                 advance()
-                local d = parseFactor()
+                local r, rp = parseFactor()
+                local d = rp and (r / 100) or r
                 if d == 0 then error("divzero") end
                 v = v / d
-            elseif c == "%" then
-                advance()
-                local d = parseFactor()
-                if d == 0 then error("divzero") end
-                v = v % d
+                pct = false
             else
                 break
             end
         end
-        return v
+        return v, pct
     end
 
     parseExpr = function()
-        local v = parseTerm()
+        local v, pct = parseTerm()
         while true do
             local c = peek()
             if c == "+" then
                 advance()
-                v = v + parseTerm()
+                local r, rp = parseTerm()
+                v = rp and (v + v * r / 100) or (v + r)
+                pct = false
             elseif c == "-" then
                 advance()
-                v = v - parseTerm()
+                local r, rp = parseTerm()
+                v = rp and (v - v * r / 100) or (v - r)
+                pct = false
             else
                 break
             end
         end
-        return v
+        return v, pct
     end
 
     local ok, result = pcall(function()
-        local v = parseExpr()
+        local v, p = parseExpr()
         if pos <= len then
             error("trailing")
+        end
+        if p then -- одиночный процент, напр. 15% -> 0.15
+            v = v / 100
         end
         return v
     end)
@@ -209,7 +245,6 @@ local function formatThousands(n)
     local intpart = math.floor(n + 1e-9)
     local frac = n - intpart
     local s = string.format("%.0f", intpart)
-    -- расставляем пробелы по 3 разряда
     local out = s:reverse():gsub("(%d%d%d)", "%1 "):reverse()
     out = out:gsub("^%s+", "")
     if frac > 1e-9 then
@@ -224,12 +259,12 @@ local function formatThousands(n)
     return out
 end
 
--- 3000000 -> "3кк", 1250000000 -> "1.25ккк"
+-- 3000000 -> "3кк", 1250000000 -> "1.25ккк" (до 2 знаков)
 local function formatCompact(n)
     local neg = n < 0
     n = math.abs(n)
     if n < 1000 then
-        local s = string.format("%.3f", n):gsub("0+$", ""):gsub("%.$", "")
+        local s = string.format("%.2f", n):gsub("0+$", ""):gsub("%.$", "")
         return (neg and "-" or "") .. s
     end
     local level = 0
@@ -238,47 +273,77 @@ local function formatCompact(n)
         v = v / 1000
         level = level + 1
     end
-    local vs = string.format("%.3f", v):gsub("0+$", ""):gsub("%.$", "")
+    local vs = string.format("%.2f", v):gsub("0+$", ""):gsub("%.$", "")
     return (neg and "-" or "") .. vs .. string.rep(K_CP1251, level)
 end
 
 -- ====================== Определение: это вычисление? ======================
 
 local function looksLikeMath(text)
-    -- нормализуем как в evaluate, чтобы проверить набор символов
-    local e = text:gsub("\208\186", "k"):gsub("\208\154", "k") -- UTF-8 к/К
-    e = e:gsub("\234", "k"):gsub("\202", "k") -- CP1251 к/К
-    e = e:gsub(",", "."):gsub("%s+", "")
+    local e = normalize(text)
     if e == "" then
         return false
     end
-    -- только разрешённые символы
     if not e:match("^[%d%.%+%-%*/%%%^%(%)k]+$") then
         return false
     end
-    -- должна быть хотя бы одна цифра
     if not e:find("%d") then
         return false
     end
-    -- и хотя бы оператор ИЛИ суффикс k (иначе обычное число типа "500" не трогаем)
+    -- нужен оператор / процент / скобка / суффикс k (иначе "500" не трогаем)
     if e:find("[%+%-%*/%%%^]") or e:find("k") or e:find("[%(%)]") then
         return true
     end
     return false
 end
 
--- ====================== Хук чата ======================
+-- ====================== Состояние ======================
 
 local COLOR = 0x00FF88
+local enabled = true
+local memory = 0
+
+local function chat(s)
+    sampAddChatMessage(u2a(s), COLOR)
+end
+
+-- ====================== Хук чата ======================
 
 function sampev.onSendChat(text)
-    if not looksLikeMath(text) then
-        return -- обычное сообщение -> отправляем как есть
+    if not enabled then
+        return -- калькулятор выключен -> всё уходит в чат как есть
     end
 
-    local result = evaluate(text)
+    local trimmed = text:gsub("^%s+", ""):gsub("%s+$", "")
+
+    -- управление памятью ведущим символом #
+    if trimmed:sub(1, 1) == "#" then
+        if #trimmed == 1 then
+            chat(string.format("{00FF88}[Память]{FFFFFF} сейчас: {FFD700}%s {888888}(%s)",
+                formatThousands(memory), formatCompact(memory)))
+        else
+            memory = 0
+            chat("{00FF88}[Память]{FFFFFF} сброшена: {FFD700}0")
+        end
+        return false
+    end
+
+    -- маркер # в конце = прибавить результат к памяти
+    local addMem = false
+    local exprText = trimmed
+    if exprText:sub(-1) == "#" then
+        addMem = true
+        exprText = exprText:sub(1, -2):gsub("%s+$", "")
+    end
+
+    -- без # включаемся только на явно математических строках
+    if not addMem and not looksLikeMath(exprText) then
+        return
+    end
+
+    local result = evaluate(exprText)
     if result == nil then
-        return -- не смогли посчитать -> не вмешиваемся
+        return -- не разобрали -> не вмешиваемся
     end
 
     local full = formatThousands(result)
@@ -286,12 +351,23 @@ function sampev.onSendChat(text)
 
     local line
     if full == compact then
-        line = string.format("{FFFFFF}%s {888888}= {00FF88}%s", text, full)
+        line = string.format("{FFFFFF}%s {888888}= {00FF88}%s", exprText, full)
     else
-        line = string.format("{FFFFFF}%s {888888}= {00FF88}%s {888888}(%s)", text, full, compact)
+        line = string.format("{FFFFFF}%s {888888}= {00FF88}%s {888888}(%s)", exprText, full, compact)
     end
 
-    sampAddChatMessage(line, COLOR)
+    -- при делении подсказываем целую часть ("на сколько хватит")
+    local norm = normalize(exprText)
+    if norm:find("/") and result > 0 and math.abs(result - math.floor(result)) > 1e-9 then
+        line = line .. string.format(" {888888}целых: {00FF88}%s", formatThousands(math.floor(result)))
+    end
+
+    if addMem then
+        memory = memory + result
+        line = line .. string.format("  {888888}>> в памяти: {FFD700}%s", formatThousands(memory))
+    end
+
+    chat(line)
 
     -- кладём числовой результат в буфер обмена (удобно вставлять обратно)
     pcall(function()
@@ -307,10 +383,18 @@ function main()
     while not isSampAvailable() do
         wait(0)
     end
+
+    sampRegisterChatCommand("calc", function()
+        enabled = not enabled
+        if enabled then
+            chat("{00FF88}[Калькулятор]{FFFFFF} включён. Пиши примеры в чат.")
+        else
+            chat("{FF5555}[Калькулятор]{FFFFFF} выключен. /calc — включить снова.")
+        end
+    end)
+
     wait(1500)
-    sampAddChatMessage(
-        u2a("{00FF88}[Калькулятор]{FFFFFF} загружен. Пиши пример прямо в чат: {00FF88}50к + 30к{FFFFFF}, поддержка 1к/1кк/1ккк."),
-        COLOR
-    )
+    chat("{00FF88}[Калькулятор]{FFFFFF} загружен. Примеры: {00FF88}50к+30к{FFFFFF}, {00FF88}1кк+15%{FFFFFF}. " ..
+        "Память: добавь {00FF88}#{FFFFFF} в конце. Вкл/выкл: {00FF88}/calc")
     wait(-1)
 end
