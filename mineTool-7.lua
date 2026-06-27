@@ -202,7 +202,7 @@ local function pushLog(msg)
     if #sysLog > 4 then table.remove(sysLog) end
 end
 
-local fMain, fSmall, fLarge
+local fMain, fSmall
 
 -- ===== math helpers (from Mine Tools) =====
 local function safeDist3d(x1,y1,z1,x2,y2,z2)
@@ -237,7 +237,6 @@ imgui.OnInitialize(function()
 
     fSmall = io.Fonts:AddFontFromFileTTF(fd..'trebucbd.ttf', 12*MDS, nil, ranges)
     fMain  = io.Fonts:AddFontFromFileTTF(fd..'trebucbd.ttf', 14*MDS, nil, ranges)
-    fLarge = io.Fonts:AddFontFromFileTTF(fd..'trebucbd.ttf', 17*MDS, nil, ranges)
 
     -- world-render font sizes used by ore search / timer sliders (10..27)
     for size = 10, 27 do
@@ -444,14 +443,6 @@ imgui.OnFrame(
 
         local dl = imgui.GetWindowDrawList()
         local wp = imgui.GetWindowPos()
-
-        -- only the title bar drags the window, so scrolling never moves it
-        if imgui.IsMouseHoveringRect(wp, V2(wp.x+W, wp.y+28*MDS))
-            and md and not drag
-            and not imgui.IsAnyItemActive()
-            and not imgui.IsAnyItemHovered() then
-            drag=true; dox=mp.x-winX; doy=mp.y-winY
-        end
 
         warnStripe(dl, wp.x, wp.y+28*MDS, W, 5*MDS)
 
@@ -880,6 +871,21 @@ imgui.OnFrame(
             imgui.TextColored(COL.TEXT_DIM, sysLog[2] or '')
         end
         if fSmall then imgui.PopFont() end
+
+        -- drag the window by grabbing anywhere, EXCEPT the settings scrollbar
+        -- (so scrolling up/down never moves the menu) or any interactive item.
+        local sbX2 = wp.x + SIDE_W + 2*MDS + CONT_W
+        local sbX1 = sbX2 - 12*MDS
+        local sbY1 = wp.y + BODY_Y
+        local sbY2 = wp.y + (H - 28*MDS)
+        local overScroll = imgui.IsMouseHoveringRect(V2(sbX1, sbY1), V2(sbX2, sbY2))
+        if imgui.IsMouseClicked(0) and not drag
+            and imgui.IsMouseHoveringRect(wp, V2(wp.x+W, wp.y+H))
+            and not overScroll
+            and not imgui.IsAnyItemActive()
+            and not imgui.IsAnyItemHovered() then
+            drag = true; dox = mp.x-winX; doy = mp.y-winY
+        end
 
         imgui.End()
     end
