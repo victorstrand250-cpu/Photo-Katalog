@@ -29,6 +29,10 @@ local renderSize        = new.int(12)      -- \xd0\xe0\xe7\xec\xe5\xf0 \xf8\xf0\
 local renderOreTimerSize= new.int(14)      -- \xd0\xe0\xe7\xec\xe5\xf0 \xf8\xf0\xe8\xf4\xf2\xe0 \xf2\xe0\xe9\xec\xe5\xf0\xe0
 local colorOreTimer     = 0xFFFF00FF       -- ARGB, default magenta
 
+-- ===== KEEP: statistics + HUD =====
+local totalStone, totalMetal, totalSilver, totalBronze, totalGold = 0,0,0,0,0
+local show_hud   = new.bool(false)
+
 -- ore detection state (ported from Mine Tools)
 local ore3dCache  = {}   -- list of {x,y,z} of "\xcc\xe5\xf1\xf2\xee\xf0\xee\xe6\xe4\xe5\xed\xe8\xe5 \xf0\xe5\xf1\xf3\xf0\xf1\xee\xe2" texts
 local textsTable  = {}   -- id -> {x,y,z} for "\xcc\xe5\xf1\xf2\xee\xf0\xee\xe6\xe4\xe5\xed\xe8\xe5" texts (autoDig)
@@ -106,6 +110,7 @@ local cfg = inicfg.load({
         renderSize       = 12,
         renderOreTimerSize = 14,
         colorOreTimer    = 0xFFFF00FF,
+        show_hud         = false,
         btnVisible       = true,
     }
 }, CFG_FILE)
@@ -123,6 +128,7 @@ renderRadius[0]     = tonumber(cfg.settings.renderRadius) or 600
 renderSize[0]       = tonumber(cfg.settings.renderSize) or 12
 renderOreTimerSize[0] = tonumber(cfg.settings.renderOreTimerSize) or 14
 colorOreTimer       = tonumber(cfg.settings.colorOreTimer) or 0xFFFF00FF
+show_hud[0]         = cfg.settings.show_hud
 btnVisible          = cfg.settings.btnVisible
 
 local function saveConfig()
@@ -139,6 +145,7 @@ local function saveConfig()
     cfg.settings.renderSize       = renderSize[0]
     cfg.settings.renderOreTimerSize = renderOreTimerSize[0]
     cfg.settings.colorOreTimer    = colorOreTimer
+    cfg.settings.show_hud         = show_hud[0]
     cfg.settings.btnVisible       = btnVisible
     inicfg.save(cfg, CFG_FILE)
 end
@@ -347,6 +354,25 @@ local function statusDot(dl, cx, cy, r, col_on, on)
     dl:AddCircle(V2(cx,cy), r+0.5, U32(0.30,0.28,0.16,0.6), 16, 1)
 end
 
+local function techBtn(label, w, h, active)
+    h = h or 28*MDS
+    w = w or -1
+    if active then
+        imgui.PushStyleColor(imgui.Col.Button,        V4(0.25,0.22,0.06,1))
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, V4(0.38,0.33,0.08,1))
+        imgui.PushStyleColor(imgui.Col.ButtonActive,  V4(0.18,0.16,0.04,1))
+        imgui.PushStyleColor(imgui.Col.Text,          COL.TEXT_YELLOW)
+    else
+        imgui.PushStyleColor(imgui.Col.Button,        V4(0.10,0.10,0.07,1))
+        imgui.PushStyleColor(imgui.Col.ButtonHovered, V4(0.18,0.17,0.10,1))
+        imgui.PushStyleColor(imgui.Col.ButtonActive,  V4(0.14,0.13,0.08,1))
+        imgui.PushStyleColor(imgui.Col.Text,          COL.TEXT_DIM)
+    end
+    local clicked = imgui.Button(label, V2(w, h))
+    imgui.PopStyleColor(4)
+    return clicked
+end
+
 local function sectionHeader(label)
     imgui.Dummy(V2(0,4*MDS))
     imgui.SetCursorPosX(8*MDS)
@@ -465,6 +491,7 @@ imgui.OnFrame(
             imgui.Dummy(V2(0,8*MDS))
             local tabDefs = {
                 {fa.SLIDERS,   1},
+                {fa.CHART_BAR, 2},
                 {fa.USER,      3},
             }
             for _,t in ipairs(tabDefs) do
@@ -490,6 +517,26 @@ imgui.OnFrame(
                 imgui.PopStyleColor(4)
                 imgui.Dummy(V2(0,4*MDS))
             end
+
+            imgui.Dummy(V2(0,8*MDS))
+            local sp2 = imgui.GetCursorScreenPos()
+            sideDL:AddLine(
+                V2(sp2.x+4, sp2.y),
+                V2(sp2.x+SIDE_W-8, sp2.y),
+                U32(0.22,0.20,0.12,0.6), 1)
+            imgui.Dummy(V2(0,8*MDS))
+
+            imgui.SetCursorPosX(4*MDS)
+            imgui.PushStyleColor(imgui.Col.Button,
+                show_hud[0] and V4(0.18,0.22,0.08,1) or V4(0,0,0,0))
+            imgui.PushStyleColor(imgui.Col.ButtonHovered, V4(0.14,0.18,0.06,0.8))
+            imgui.PushStyleColor(imgui.Col.Text,
+                show_hud[0] and COL.TEXT_GREEN or COL.TEXT_DIM)
+            if imgui.Button(fa.DISPLAY, V2(SIDE_W-8*MDS, 38*MDS)) then
+                show_hud[0] = not show_hud[0]
+                saveConfig()
+            end
+            imgui.PopStyleColor(3)
 
             imgui.EndChild()
         end
@@ -613,6 +660,67 @@ imgui.OnFrame(
                 if imgui.Checkbox(fa.CIRCLE_DOT..'  '..u8('\xca\xed\xee\xef\xea\xe0 \xec\xe5\xed\xfe'), cb_btn) then
                     btnVisible = cb_btn[0]
                     saveConfig()
+                end
+
+            elseif activeTab == 2 then
+
+                local cdl    = imgui.GetWindowDrawList()
+                local total  = totalStone+totalMetal+totalSilver+totalBronze+totalGold
+                local elapsed2 = os.time() - session_start_time
+
+                local cp = imgui.GetCursorScreenPos()
+                cdl:AddRect(V2(cp.x+4,cp.y), V2(cp.x+CONT_W-16,cp.y+150*MDS),
+                    U32(0.22,0.20,0.12,0.5), 2, 0, 1)
+                imgui.SetCursorScreenPos(V2(cp.x+12, cp.y+1*MDS))
+                imgui.TextColored(COL.TEXT_YELLOW, u8('\xc4\xce\xc1\xdb\xd7\xc0'))
+                imgui.Dummy(V2(0,13*MDS))
+
+                local oreD = {
+                    {fa.CIRCLE..'  '..u8('\xca\xe0\xec\xe5\xed\xfc'),  totalStone,  V4(0.70,0.70,0.68,1)},
+                    {fa.WRENCH..'  '..u8('\xcc\xe5\xf2\xe0\xeb\xeb'),   totalMetal,  V4(0.68,0.72,0.88,1)},
+                    {fa.STAR..'  '..u8('\xd1\xe5\xf0\xe5\xe1\xf0\xee'),  totalSilver, V4(0.90,0.90,0.95,1)},
+                    {fa.CIRCLE..'  '..u8('\xc1\xf0\xee\xed\xe7\xe0'),   totalBronze, V4(0.82,0.58,0.26,1)},
+                    {fa.STAR..'  '..u8('\xc7\xee\xeb\xee\xf2\xee'),     totalGold,   V4(1.00,0.82,0.12,1)},
+                }
+                for _,r in ipairs(oreD) do
+                    imgui.SetCursorPosX(10*MDS)
+                    imgui.TextColored(COL.TEXT_DIM, r[1])
+                    imgui.SameLine(130*MDS)
+                    imgui.TextColored(r[3], tostring(r[2]))
+                end
+
+                imgui.SetCursorPosX(10*MDS)
+                imgui.Dummy(V2(0,4*MDS))
+                imgui.SetCursorPosX(10*MDS)
+                imgui.TextColored(COL.TEXT_GREEN,
+                    fa.LAYER_GROUP..'  '..string.format(u8('\xc2\xd1\xc5\xc3\xce: %d'), total))
+                imgui.SameLine()
+                imgui.TextColored(COL.TEXT_DIM,
+                    '    '..fa.CLOCK..'  '..string.format('%02d:%02d',
+                        math.floor(elapsed2/60), elapsed2%60))
+
+                imgui.Dummy(V2(0,6*MDS))
+                local bp = imgui.GetCursorScreenPos()
+                local pw = CONT_W-24*MDS
+                local prg = math.min(total/1000.0, 1.0)
+                cdl:AddRect(V2(bp.x+6,bp.y), V2(bp.x+6+pw,bp.y+10*MDS),
+                    U32(0.22,0.20,0.12,0.7), 0)
+                if prg > 0 then
+                    cdl:AddRectFilled(V2(bp.x+7,bp.y+1),
+                        V2(bp.x+7+(pw-2)*prg, bp.y+9*MDS),
+                        U32(0.25,0.62,0.18,0.9))
+                end
+                imgui.SetCursorScreenPos(V2(bp.x+6+pw/2-20, bp.y))
+                imgui.TextColored(COL.TEXT_DIM, string.format('%.0f%%', prg*100))
+                imgui.Dummy(V2(0,14*MDS))
+
+                imgui.SetCursorPosX(10*MDS)
+                if techBtn(fa.ROTATE_LEFT..'  '..u8('\xd1\xc1\xd0\xce\xd1 \xd1\xd2\xc0\xd2\xd1\xc0'),
+                    CONT_W-20*MDS, 26*MDS) then
+                    totalStone=0; totalMetal=0; totalSilver=0
+                    totalBronze=0; totalGold=0
+                    session_start_time=os.time()
+                    pushLog(u8('\xd1\xf2\xe0\xf2\xf1 \xf1\xe1\xf0\xee\xf8\xe5\xed'))
                 end
 
             elseif activeTab == 3 then
@@ -865,6 +973,104 @@ imgui.OnFrame(
         end
     end
 )
+
+-- ===== KEEP: stats HUD window =====
+imgui.OnFrame(
+    function() return show_hud[0] and not isPauseMenuActive() end,
+    function(self)
+        self.HideCursor = false
+        applyTheme()
+
+        local mW = 220*MDS
+        imgui.SetNextWindowPos(V2(16*MDS, sh/2 - 190*MDS), imgui.Cond.FirstUseEver)
+        imgui.SetNextWindowSize(V2(mW, 0), imgui.Cond.Always)
+
+        local mTitle = fa.HAMMER..'  MINE STATS  ##mhud'
+        imgui.Begin(mTitle, show_hud,
+            imgui.WindowFlags.NoResize
+          + imgui.WindowFlags.NoScrollbar
+          + imgui.WindowFlags.AlwaysAutoResize)
+
+        local dl2 = imgui.GetWindowDrawList()
+        local wp2 = imgui.GetWindowPos()
+        local ws2 = imgui.GetWindowSize()
+
+        warnStripe(dl2, wp2.x, wp2.y+28*MDS, mW, 4*MDS)
+
+        if fMain then imgui.PushFont(fMain) end
+
+        imgui.SetCursorPos(V2(8*MDS, 38*MDS))
+
+        local total  = totalStone+totalMetal+totalSilver+totalBronze+totalGold
+        local elapsed2 = os.time() - session_start_time
+
+        if fSmall then imgui.PopFont(); imgui.PushFont(fSmall) end
+
+        local oreRows = {
+            {u8('\xca\xe0\xec\xe5\xed\xfc'),  totalStone,  V4(0.68,0.68,0.66,1)},
+            {u8('\xcc\xe5\xf2\xe0\xeb\xeb'),   totalMetal,  V4(0.65,0.70,0.85,1)},
+            {u8('\xd1\xe5\xf0\xe5\xe1\xf0\xee'),totalSilver,V4(0.88,0.88,0.93,1)},
+            {u8('\xc1\xf0\xee\xed\xe7\xe0'),   totalBronze, V4(0.80,0.55,0.24,1)},
+            {u8('\xc7\xee\xeb\xee\xf2\xee'),   totalGold,   V4(1.00,0.82,0.10,1)},
+        }
+        for _,r in ipairs(oreRows) do
+            imgui.SetCursorPosX(8*MDS)
+            imgui.TextColored(COL.TEXT_DIM, r[1])
+            imgui.SameLine(90*MDS)
+            imgui.TextColored(r[3], tostring(r[2]))
+        end
+
+        local sp3 = imgui.GetCursorScreenPos()
+        dl2:AddLine(V2(sp3.x+4,sp3.y), V2(sp3.x+ws2.x-8,sp3.y),
+            U32(0.22,0.20,0.12,0.5), 1)
+        imgui.Dummy(V2(0,4*MDS))
+        imgui.SetCursorPosX(8*MDS)
+        imgui.TextColored(COL.TEXT_GREEN,
+            fa.LAYER_GROUP..'  '..string.format(u8('\xc2\xd1\xc5\xc3\xce: %d'), total))
+        imgui.SameLine()
+        imgui.TextColored(COL.TEXT_DIM,
+            '  '..fa.CLOCK..' '..string.format(' %02d:%02d',
+                math.floor(elapsed2/60), elapsed2%60))
+
+        local prg2 = math.min(total/1000.0, 1.0)
+        local bp2  = imgui.GetCursorScreenPos()
+        dl2:AddRect(V2(bp2.x+4,bp2.y), V2(bp2.x+ws2.x-8,bp2.y+8*MDS),
+            U32(0.22,0.20,0.12,0.6))
+        if prg2 > 0 then
+            dl2:AddRectFilled(V2(bp2.x+5,bp2.y+1),
+                V2(bp2.x+5+(ws2.x-14)*prg2,bp2.y+7*MDS),
+                U32(0.20,0.55,0.14,0.9))
+        end
+        imgui.Dummy(V2(0,10*MDS))
+        imgui.SetCursorPosX(8*MDS)
+        techBtn(fa.ROTATE_LEFT..'  '..u8('\xd1\xc1\xd0\xce\xd1'), ws2.x-16*MDS, 22*MDS)
+        if imgui.IsItemClicked() then
+            totalStone=0; totalMetal=0; totalSilver=0
+            totalBronze=0; totalGold=0
+            session_start_time=os.time()
+        end
+
+        if fSmall then imgui.PopFont()
+        elseif fMain then imgui.PopFont() end
+
+        imgui.End()
+    end
+)
+
+-- ===== KEEP: ore counting for statistics =====
+function sampev.onDisplayGameText(style, tm, text)
+    if type(text) ~= 'string' then return end
+    local ore, num = text:match('^(%a+)%s*%+%s*(%d+)$')
+    if not ore then return end
+    num = tonumber(num)
+    if not num or num < 1 or num > 10 then return end
+    if     ore == 'stone'  then totalStone  = totalStone  + num
+    elseif ore == 'metal'  then totalMetal  = totalMetal  + num
+    elseif ore == 'silver' then totalSilver = totalSilver + num
+    elseif ore == 'bronze' then totalBronze = totalBronze + num
+    elseif ore == 'gold'   then totalGold   = totalGold   + num
+    end
+end
 
 -- ===== KEEP: CJ run + infinite run =====
 function enableCj()
