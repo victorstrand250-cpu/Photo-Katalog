@@ -452,14 +452,14 @@ end
 lua_thread.create(function()
     while true do
         wait(1000)
-        if autoMask and isSampAvailable() and os.clock() >= maskNextTime then
+        if autoMask and isSampAvailable() and os.time() >= maskNextTime then
             maskConfirmed = false
             sampSendChat('/mask')
             wait(2000)
             if not maskConfirmed then
                 sampSendChat('/mask')
             end
-            maskNextTime = os.clock() + 20 * 60
+            maskNextTime = os.time() + 20 * 60
         end
     end
 end)
@@ -1302,8 +1302,10 @@ end
 function enableObjectCollision()
     local ok, objs = pcall(getAllObjects)
     if not ok or not objs then return end
+    local protected = {}
+    for _, h in ipairs(_jonesObjects) do protected[h] = true end
     for k, v in ipairs(objs) do
-        if doesObjectExist(v) then
+        if doesObjectExist(v) and not protected[v] then
             pcall(setObjectCollision, v, not objCollisionEnabled)
         end
     end
