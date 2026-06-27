@@ -1788,10 +1788,18 @@ local function u32(c, a)
     return imgui.ColorConvertFloat4ToU32(cc)
 end
 
+-- Optional vertical clip for hit-testing (used by the scrollable Защита page so
+-- controls scrolled out of view don't catch clicks). nil = no clip.
+local _uiClipTop, _uiClipBottom = nil, nil
+local function _inUiClip(my)
+    if not _uiClipTop then return true end
+    return my >= _uiClipTop and my <= _uiClipBottom
+end
+
 local function dlBtn(DL, x, y, w, h, bg, hov, label, lc, rnd)
     rnd = rnd or 8*MDS
     local mx, my = imgui.GetMousePos().x, imgui.GetMousePos().y
-    local over = mx >= x and mx <= x+w and my >= y and my <= y+h
+    local over = mx >= x and mx <= x+w and my >= y and my <= y+h and _inUiClip(my)
     local hit  = over and imgui.IsMouseClicked(0)
     DL:AddRectFilled(imgui.ImVec2(x,y), imgui.ImVec2(x+w,y+h),
         u32(over and hov or bg), rnd)
@@ -1808,7 +1816,7 @@ local function toggleRow(DL, x, y, w, label, val)
     local th = 22*MDS; local tw = 44*MDS
     local tx = x + w - tw; local ty = y + 2*MDS
     local mx, my = imgui.GetMousePos().x, imgui.GetMousePos().y
-    local over = mx >= tx and mx <= tx+tw and my >= ty and my <= ty+th
+    local over = mx >= tx and mx <= tx+tw and my >= ty and my <= ty+th and _inUiClip(my)
     local clicked = over and imgui.IsMouseClicked(0)
     if clicked then val = not val end
 
@@ -1856,6 +1864,8 @@ local WinMain   = imgui.new.bool(false)
 local WinStats  = imgui.new.bool(false)
 local WinFab    = imgui.new.bool(true)
 local curPage   = 1
+local protectScroll = 0
+local _p3DragSB     = false
 
 local _buf = {
     cot     = imgui.new.float[1](0),
@@ -2464,7 +2474,9 @@ local function _renderPage3(DL, WP, cntX, cntY, cntW)
     DL:AddText(imgui.ImVec2(cntX, cy),
         u32(aiOn and CLR.green or CLR.textDim),
         aiOn and u8'\xc8\xc8: \xe2\xea\xeb\xfe\xf7\xb8\xed' or u8'\xc8\xc8: \xe2\xfb\xea\xeb (\xed\xe5\xf2 \xea\xeb\xfe\xf7\xe0/\xee\xf2\xea\xeb.)')
+    cy = cy + 18*MDS
 
+    return cy - cntY
 end
 
 local function _renderPage4(DL, WP, cntX, cntY, cntW)
@@ -2536,7 +2548,7 @@ imgui.OnFrame(
         self.HideCursor = true
 
         local W = math.min(resx*0.88, 480*MDS)
-        local H = math.min(resy*0.92, 565*MDS)
+        local H = math.min(resy*0.82, 510*MDS)
 
         imgui.SetNextWindowPos(imgui.ImVec2(resx*0.5, resy*0.5),
             imgui.Cond.FirstUseEver, imgui.ImVec2(0.5,0.5))
@@ -2674,7 +2686,7 @@ imgui.OnFrame(
                 u32(isAT and imgui.ImVec4(0.05,0.05,0.05,1) or (hovT and CLR.text or CLR.textDim)),
                 lbl)
             pFpop(pSm)
-            if hovT and imgui.IsMouseClicked(0) then curPage = i end
+            if hovT and imgui.IsMouseClicked(0) then curPage = i; goal.sideTab = 0 end
         end
 
         local bodyY  = tabsY + tabsH + 1
@@ -2929,7 +2941,55 @@ imgui.OnFrame(
         else
             if curPage == 1 then _renderPage1(DL, WP, cntX, cntY, cntW)
             elseif curPage == 2 then _renderPage2(DL, WP, cntX, cntY, cntW)
-            elseif curPage == 3 then _renderPage3(DL, WP, cntX, cntY, cntW)
+            elseif curPage == 3 then
+                -- Защита: scrollable (content can exceed the window height)
+                local viewTop    = cntY
+                local viewBottom = WP.y + H - 12*MDS
+                local viewH      = viewBottom - viewTop
+                local sbW        = 5*MDS
+                local areaW      = cntW - (sbW + 6*MDS)
+
+                _uiClipTop, _uiClipBottom = viewTop, viewBottom
+                local okClip = pcall(function()
+                    DL:PushClipRect(imgui.ImVec2(WP.x, viewTop), imgui.ImVec2(WP.x+W, viewBottom), true)
+                end)
+                local contentH = _renderPage3(DL, WP, cntX, viewTop - protectScroll, areaW)
+                if okClip then pcall(function() DL:PopClipRect() end) end
+                _uiClipTop, _uiClipBottom = nil, nil
+
+                local maxScroll = math.max(0, contentH - viewH)
+                if protectScroll > maxScroll then protectScroll = maxScroll end
+                if protectScroll < 0 then protectScroll = 0 end
+
+                local mxW = imgui.GetMousePos().x
+                local myW = imgui.GetMousePos().y
+                if mxW>=WP.x and mxW<=WP.x+W and myW>=viewTop and myW<=viewBottom and maxScroll > 0 then
+                    local wheel = imgui.GetIO().MouseWheel
+                    if wheel ~= 0 then
+                        protectScroll = math.max(0, math.min(maxScroll, protectScroll - wheel*42*MDS))
+                    end
+                end
+
+                if maxScroll > 0 then
+                    local trackX = WP.x + W - sbW - 4*MDS
+                    DL:AddRectFilled(imgui.ImVec2(trackX, viewTop), imgui.ImVec2(trackX+sbW, viewBottom),
+                        u32(imgui.ImVec4(1,1,1,0.06)), sbW*0.5)
+                    local grabH = math.max(26*MDS, viewH * (viewH / contentH))
+                    local grabY = viewTop + (viewH - grabH) * (protectScroll / maxScroll)
+                    local overGrab = mxW>=trackX-5*MDS and mxW<=trackX+sbW+5*MDS and myW>=grabY and myW<=grabY+grabH
+                    if imgui.IsMouseClicked(0) and overGrab then _p3DragSB = true end
+                    if not imgui.IsMouseDown(0) then _p3DragSB = false end
+                    if _p3DragSB then
+                        local rel = (myW - viewTop - grabH*0.5) / (viewH - grabH)
+                        rel = math.max(0, math.min(1, rel))
+                        protectScroll = rel * maxScroll
+                        grabY = viewTop + (viewH - grabH) * (protectScroll / maxScroll)
+                    end
+                    DL:AddRectFilled(imgui.ImVec2(trackX, grabY), imgui.ImVec2(trackX+sbW, grabY+grabH),
+                        u32((_p3DragSB or overGrab) and CLR.accent or imgui.ImVec4(1,1,1,0.28)), sbW*0.5)
+                else
+                    protectScroll = 0
+                end
             elseif curPage == 4 then _renderPage4(DL, WP, cntX, cntY, cntW)
             end
         end
