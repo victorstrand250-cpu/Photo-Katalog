@@ -601,7 +601,7 @@ imgui.OnFrame(
 
                 imgui.Dummy(V2(0,2*MDS))
                 imgui.SetCursorPosX(10*MDS)
-                imgui.PushItemWidth(CONT_W - 30*MDS)
+                imgui.PushItemWidth(CONT_W * 0.4)
                 if imgui.SliderInt(u8('\xd0\xe0\xe4\xe8\xf3\xf1 \xef\xee\xe8\xf1\xea\xe0'), renderRadius, 1, 600) then
                     saveConfig()
                 end
@@ -649,7 +649,7 @@ imgui.OnFrame(
 
                 imgui.Dummy(V2(0,2*MDS))
                 imgui.SetCursorPosX(10*MDS)
-                imgui.PushItemWidth(CONT_W - 30*MDS)
+                imgui.PushItemWidth(CONT_W * 0.4)
                 if imgui.SliderInt(u8('\xd0\xe0\xe7\xec\xe5\xf0 \xf8\xf0\xe8\xf4\xf2\xe0 \xf2\xe0\xe9\xec\xe5\xf0\xe0'), renderOreTimerSize, 10, 27) then
                     saveConfig()
                 end
