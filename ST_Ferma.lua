@@ -1865,7 +1865,6 @@ local WinStats  = imgui.new.bool(false)
 local WinFab    = imgui.new.bool(true)
 local curPage   = 1
 local protectScroll = 0
-local _p3DragSB     = false
 
 local _buf = {
     cot     = imgui.new.float[1](0),
@@ -2946,7 +2945,7 @@ imgui.OnFrame(
                 local viewTop    = cntY
                 local viewBottom = WP.y + H - 12*MDS
                 local viewH      = viewBottom - viewTop
-                local sbW        = 5*MDS
+                local sbW        = 10*MDS
                 local areaW      = cntW - (sbW + 6*MDS)
 
                 _uiClipTop, _uiClipBottom = viewTop, viewBottom
@@ -2972,21 +2971,23 @@ imgui.OnFrame(
 
                 if maxScroll > 0 then
                     local trackX = WP.x + W - sbW - 4*MDS
-                    DL:AddRectFilled(imgui.ImVec2(trackX, viewTop), imgui.ImVec2(trackX+sbW, viewBottom),
-                        u32(imgui.ImVec4(1,1,1,0.06)), sbW*0.5)
-                    local grabH = math.max(26*MDS, viewH * (viewH / contentH))
-                    local grabY = viewTop + (viewH - grabH) * (protectScroll / maxScroll)
-                    local overGrab = mxW>=trackX-5*MDS and mxW<=trackX+sbW+5*MDS and myW>=grabY and myW<=grabY+grabH
-                    if imgui.IsMouseClicked(0) and overGrab then _p3DragSB = true end
-                    if not imgui.IsMouseDown(0) then _p3DragSB = false end
-                    if _p3DragSB then
+                    local grabH  = math.max(52*MDS, viewH * (viewH / contentH))
+                    -- Interaction handled by an imgui item so imgui captures the
+                    -- mouse — the game camera/character won't move while dragging.
+                    imgui.SetCursorPos(imgui.ImVec2(trackX - WP.x - 4*MDS, viewTop - WP.y))
+                    imgui.InvisibleButton('##p3sb', imgui.ImVec2(sbW + 8*MDS, viewH))
+                    local active = imgui.IsItemActive()
+                    local hovG   = imgui.IsItemHovered()
+                    if active then
                         local rel = (myW - viewTop - grabH*0.5) / (viewH - grabH)
                         rel = math.max(0, math.min(1, rel))
                         protectScroll = rel * maxScroll
-                        grabY = viewTop + (viewH - grabH) * (protectScroll / maxScroll)
                     end
+                    local grabY = viewTop + (viewH - grabH) * (protectScroll / maxScroll)
+                    DL:AddRectFilled(imgui.ImVec2(trackX, viewTop), imgui.ImVec2(trackX+sbW, viewBottom),
+                        u32(imgui.ImVec4(1,1,1,0.06)), sbW*0.5)
                     DL:AddRectFilled(imgui.ImVec2(trackX, grabY), imgui.ImVec2(trackX+sbW, grabY+grabH),
-                        u32((_p3DragSB or overGrab) and CLR.accent or imgui.ImVec4(1,1,1,0.28)), sbW*0.5)
+                        u32((active or hovG) and CLR.accent or imgui.ImVec4(1,1,1,0.28)), sbW*0.5)
                 else
                     protectScroll = 0
                 end
