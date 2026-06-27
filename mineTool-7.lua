@@ -13,33 +13,29 @@ local lfs   = require 'lfs'
 local inicfg = require 'inicfg'
 
 local WinState   = new.bool(false)
--- ===== KEEP: CJ run + infinite run =====
 local cj         = new.bool(false)
 local beskbeg    = new.bool(false)
--- ===== ADDED FROM Mine Tools (per screenshots) =====
-local renderOre        = new.bool(false)   -- \xcf\xee\xe8\xf1\xea \xf0\xf3\xe4\xfb
-local autoDig          = new.bool(false)   -- \xc0\xe2\xf2\xee \xe2\xfb\xea\xe0\xef\xfb\xe2\xe0\xed\xe8\xe5 \xf0\xf3\xe4\xfb
-local showOreLine      = new.bool(false)   -- \xcf\xee\xea\xe0\xe7\xfb\xe2\xe0\xf2\xfc \xeb\xe8\xed\xe8\xfe
-local showOreDistance  = new.bool(false)   -- \xcf\xee\xea\xe0\xe7\xfb\xe2\xe0\xf2\xfc \xe4\xe8\xf1\xf2\xe0\xed\xf6\xe8\xfe
-local oreTimer         = new.bool(false)   -- \xd2\xe0\xe9\xec\xe5\xf0 \xf0\xf3\xe4\xfb
-local oreTimerDistance = new.bool(false)   -- \xcf\xee\xea\xe0\xe7. \xe4\xe8\xf1\xf2\xe0\xed\xf6\xe8\xfe \xe4\xee \xf0\xf3\xe4\xfb
-local oreTimerLine     = new.bool(false)   -- \xcf\xee\xea\xe0\xe7. \xeb\xe8\xed\xe8\xfe \xe4\xee \xf2\xe0\xe9\xec\xe5\xf0\xe0
-local renderRadius      = new.int(600)     -- \xd0\xe0\xe4\xe8\xf3\xf1 \xef\xee\xe8\xf1\xea\xe0
-local renderSize        = new.int(12)      -- \xd0\xe0\xe7\xec\xe5\xf0 \xf8\xf0\xe8\xf4\xf2\xe0
-local renderOreTimerSize= new.int(14)      -- \xd0\xe0\xe7\xec\xe5\xf0 \xf8\xf0\xe8\xf4\xf2\xe0 \xf2\xe0\xe9\xec\xe5\xf0\xe0
-local colorOreTimer     = 0xFFFF00FF       -- ARGB, default magenta
+local renderOre        = new.bool(false)
+local autoDig          = new.bool(false)
+local showOreLine      = new.bool(false)
+local showOreDistance  = new.bool(false)
+local oreTimer         = new.bool(false)
+local oreTimerDistance = new.bool(false)
+local oreTimerLine     = new.bool(false)
+local renderRadius      = new.int(600)
+local renderSize        = new.int(12)
+local renderOreTimerSize= new.int(14)
+local colorOreTimer     = 0xFFFF00FF
 
--- ===== KEEP: statistics + HUD =====
 local totalStone, totalMetal, totalSilver, totalBronze, totalGold = 0,0,0,0,0
 local show_hud   = new.bool(false)
 
--- ore detection state (ported from Mine Tools)
-local ore3dCache  = {}   -- list of {x,y,z} of "\xcc\xe5\xf1\xf2\xee\xf0\xee\xe6\xe4\xe5\xed\xe8\xe5 \xf0\xe5\xf1\xf3\xf0\xf1\xee\xe2" texts
-local textsTable  = {}   -- id -> {x,y,z} for "\xcc\xe5\xf1\xf2\xee\xf0\xee\xe6\xe4\xe5\xed\xe8\xe5" texts (autoDig)
-local oreTimerList= {}   -- list of {x,y,z, expireTime}
+local ore3dCache  = {}
+local textsTable  = {}
+local oreTimerList= {}
 local digCounter  = 0
 
-local font = {}  -- imgui fonts indexed by pixel size (10..27)
+local font = {}
 local btnVisible  = true
 
 local bass        = nil
@@ -204,7 +200,6 @@ end
 
 local fMain, fSmall
 
--- ===== math helpers (from Mine Tools) =====
 local function safeDist3d(x1,y1,z1,x2,y2,z2)
     x1=tonumber(x1) or 0; y1=tonumber(y1) or 0; z1=tonumber(z1) or 0
     x2=tonumber(x2) or 0; y2=tonumber(y2) or 0; z2=tonumber(z2) or 0
@@ -238,7 +233,6 @@ imgui.OnInitialize(function()
     fSmall = io.Fonts:AddFontFromFileTTF(fd..'trebucbd.ttf', 12*MDS, nil, ranges)
     fMain  = io.Fonts:AddFontFromFileTTF(fd..'trebucbd.ttf', 14*MDS, nil, ranges)
 
-    -- world-render font sizes used by ore search / timer sliders (10..27)
     for size = 10, 27 do
         font[size] = io.Fonts:AddFontFromFileTTF(fd..'trebucbd.ttf', size*MDS, nil, ranges)
     end
@@ -541,7 +535,6 @@ imgui.OnFrame(
 
             if activeTab == 1 then
 
-                -- ===== \xce\xd1\xcd\xce\xc2\xcd\xdb\xc5 \xcc\xce\xc4\xdb (CJ run + infinite run) =====
                 imgui.SetCursorPosX(8*MDS)
                 imgui.TextColored(COL.TEXT_YELLOW, u8('\xce\xd1\xcd\xce\xc2\xcd\xdb\xc5 \xcc\xce\xc4\xdb'))
                 imgui.Separator()
@@ -563,7 +556,6 @@ imgui.OnFrame(
                     saveConfig()
                 end
 
-                -- ===== \xcf\xce\xc8\xd1\xca \xd0\xd3\xc4\xdb (from Mine Tools) =====
                 sectionHeader(u8('\xcf\xce\xc8\xd1\xca \xd0\xd3\xc4\xdb'))
 
                 imgui.SetCursorPosX(10*MDS)
@@ -602,7 +594,6 @@ imgui.OnFrame(
                 end
                 imgui.PopItemWidth()
 
-                -- ===== \xd2\xc0\xc9\xcc\xc5\xd0 \xd0\xd3\xc4\xdb (from Mine Tools) =====
                 sectionHeader(u8('\xd2\xc0\xc9\xcc\xc5\xd0 \xd0\xd3\xc4\xdb'))
 
                 do
@@ -872,8 +863,6 @@ imgui.OnFrame(
         end
         if fSmall then imgui.PopFont() end
 
-        -- drag the window by grabbing anywhere, EXCEPT the settings scrollbar
-        -- (so scrolling up/down never moves the menu) or any interactive item.
         local sbX2 = wp.x + SIDE_W + 2*MDS + CONT_W
         local sbX1 = sbX2 - 12*MDS
         local sbY1 = wp.y + BODY_Y
@@ -891,7 +880,6 @@ imgui.OnFrame(
     end
 )
 
--- ===== world render: ore search lines/distance + ore timer (from Mine Tools) =====
 local ORE_LABEL  = u8('\xd0\xf3\xe4\xe0')
 local ORE_REMAIN = u8('\xce\xf1\xf2\xe0\xeb\xee\xf1\xfc ')
 
@@ -981,7 +969,6 @@ imgui.OnFrame(
     end
 )
 
--- ===== KEEP: stats HUD window =====
 imgui.OnFrame(
     function() return show_hud[0] and not isPauseMenuActive() end,
     function(self)
@@ -1064,7 +1051,6 @@ imgui.OnFrame(
     end
 )
 
--- ===== KEEP: ore counting for statistics =====
 function sampev.onDisplayGameText(style, tm, text)
     if type(text) ~= 'string' then return end
     local ore, num = text:match('^(%a+)%s*%+%s*(%d+)$')
@@ -1079,7 +1065,6 @@ function sampev.onDisplayGameText(style, tm, text)
     end
 end
 
--- ===== KEEP: CJ run + infinite run =====
 function enableCj()
     if cj[0] then
         setAnimGroupForChar(PLAYER_PED, "PLAYER")
@@ -1096,7 +1081,6 @@ function enableBesk()
     end
 end
 
--- ===== ore 3d-text detection (from Mine Tools) =====
 function sampev.onCreate3DText(id, color, position, dist, testLOS, player, vehicle, text)
     if type(text) ~= 'string' then return end
     if text:find('\xcc\xe5\xf1\xf2\xee\xf0\xee\xe6\xe4\xe5\xed\xe8\xe5') then
@@ -1136,7 +1120,6 @@ function sampev.onRemove3DTextLabel(id)
     end
 end
 
--- ===== auto dig (from Mine Tools) =====
 function sampev.onSendPlayerSync(data)
     if autoDig[0] then
         digCounter = digCounter + 1
@@ -1172,7 +1155,6 @@ function main()
         oreTimer[0] = not oreTimer[0]; saveConfig()
     end)
 
-    -- background scan: collect "\xcc\xe5\xf1\xf2\xee\xf0\xee\xe6\xe4\xe5\xed\xe8\xe5 \xf0\xe5\xf1\xf3\xf0\xf1\xee\xe2" 3d-texts for ore search
     lua_thread.create(function()
         while true do
             wait(1500)
