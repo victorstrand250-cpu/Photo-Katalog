@@ -1,4 +1,4 @@
-script_name('mineTOOL | Mobile')
+script_name('Mine Helper')
 script_author('MineTool Team')
 script_version('1.1')
 
@@ -191,7 +191,7 @@ local fa      = require('fAwesome6_solid')
 local faicons = require('fAwesome6')
 
 local activeTab = 1
-local winX, winY = sw/2 - 208*MDS, sh/2 - 184*MDS
+local winX, winY = sw/2 - 245*MDS, sh/2 - 184*MDS
 local drag, dox, doy = false, 0, 0
 local logoTex   = nil
 local logoTried = false
@@ -428,24 +428,25 @@ imgui.OnFrame(
         local md = imgui.IsMouseDown(0)
         if drag then
             if md then
-                winX = math.max(0, math.min(sw-416*MDS, mp.x-dox))
+                winX = math.max(0, math.min(sw-490*MDS, mp.x-dox))
                 winY = math.max(0, math.min(sh-368*MDS, mp.y-doy))
             else drag = false end
         end
 
-        local W, H = 416*MDS, 368*MDS
+        local W, H = 490*MDS, 368*MDS
 
         imgui.SetNextWindowPos(V2(winX, winY), imgui.Cond.Always)
         imgui.SetNextWindowSize(V2(W, H), imgui.Cond.Always)
 
-        local title = fa.HELMET_SAFETY..' mineTOOL TERMINAL  v1.1  ##mt'
+        local title = fa.HELMET_SAFETY..' Mine Helper  v1.1  ##mt'
         imgui.Begin(title, WinState,
-            imgui.WindowFlags.NoResize + imgui.WindowFlags.NoScrollbar)
+            imgui.WindowFlags.NoResize + imgui.WindowFlags.NoScrollbar + imgui.WindowFlags.NoMove)
 
         local dl = imgui.GetWindowDrawList()
         local wp = imgui.GetWindowPos()
 
-        if imgui.IsMouseHoveringRect(wp, V2(wp.x+W, wp.y+H))
+        -- only the title bar drags the window, so scrolling never moves it
+        if imgui.IsMouseHoveringRect(wp, V2(wp.x+W, wp.y+28*MDS))
             and md and not drag
             and not imgui.IsAnyItemActive()
             and not imgui.IsAnyItemHovered() then
@@ -734,7 +735,7 @@ imgui.OnFrame(
                 imgui.Dummy(V2(0,13*MDS))
 
                 imgui.SetCursorPosX(10*MDS)
-                imgui.TextColored(COL.TEXT_DIM, 'mineTOOL v1.1')
+                imgui.TextColored(COL.TEXT_DIM, 'Mine Helper v1.1')
                 imgui.SetCursorPosX(10*MDS)
                 imgui.TextColored(COL.TEXT_DIM, u8('\xcc\xee\xe1\xe8\xeb\xfc\xed\xfb\xe9 \xf1\xea\xf0\xe8\xef\xf2'))
 
@@ -1194,7 +1195,7 @@ function main()
         end
     end)
 
-    pushLog(u8('\xc7\xe0\xe3\xf0\xf3\xe6\xe5\xed: mineTOOL v1.1'))
+    pushLog(u8('\xc7\xe0\xe3\xf0\xf3\xe6\xe5\xed: Mine Helper v1.1'))
 
     while true do
         wait(0)
