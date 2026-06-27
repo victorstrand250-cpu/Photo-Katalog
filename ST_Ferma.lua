@@ -299,6 +299,7 @@ local larekIsWalking = false
 local testLarekMode  = false
 
 -- ===== Anti-admin (ported from StrandShahta) =====
+local ai             -- AI subsystem, populated after config load
 local aaState        = false
 local aaAngry        = 0
 local aaTimes        = os.clock()
@@ -434,6 +435,32 @@ local function aaSendReply(questionText)
     aaReplying = true
     aaAngry = aaAngry + 1
     aaTimes = os.clock()
+
+    -- AI-generated reply (Groq/Claude/OpenAI/Gemini) with fallback to canned answers
+    if ai and ai.enabled and ai.activeKey() ~= '' and questionText then
+        ai.request(ai.buildPrompt(u8(questionText), u8(ai.lastAdminName or '')), ai.system, function(ok, text)
+            local mesg
+            if ok and text and text ~= '' then
+                local cp = ai.fromU8(text)
+                cp = cp:gsub('[\r\n]+', ' ')
+                cp = cp:gsub('^["\'\xab%s]+', ''):gsub('["\'\xbb%s]+$', '')
+                if cp:sub(1, 3) == '/b ' then cp = cp:sub(4) end
+                if #cp > 100 then cp = cp:sub(1, 100) end
+                if cp ~= '' then mesg = '/b ' .. cp end
+            end
+            if not mesg then
+                local smart = aaSmartAnswer(questionText)
+                if smart then mesg = '/b ' .. smart
+                elseif aaAngry == 1 then mesg = aaOtveti1[math.random(#aaOtveti1)]
+                else mesg = aaOtveti2[math.random(#aaOtveti2)] end
+            end
+            wait(math.random(3500, 7000))
+            sampSendChat(mesg)
+            aaReplying = false
+        end)
+        return
+    end
+
     wait(math.random(7000, 11000))
     local mesg
     local smart = aaSmartAnswer(questionText)
@@ -777,6 +804,186 @@ do
         licInputBuf[i - 1] = string.byte(k, i)
     end
     licInputBuf[math.min(#k, 63)] = 0
+end
+
+-- ===== AI replies to admins (ported from StrandShahta) =====
+if not ini.ai then ini.ai = {} end
+do
+    local d = {
+        enabled='true', provider='3',
+        key_claude='', key_openai='', key_gemini='', key_groq='',
+        model='', system='',
+    }
+    for k,v in pairs(d) do if ini.ai[k] == nil then ini.ai[k] = v end end
+end
+
+ai = {
+    DEFAULT_SYSTEM = "Ты — обычный живой игрок на русском SAMP RP сервере, прямо сейчас работаешь на ферме — собираешь хлопок и лён. Иногда администратор пишет тебе в чат, чтобы проверить, что ты не бот и не используешь читы. Твоя задача: ответить максимально естественно, коротко и по-человечески, как настоящий игрок, чтобы развеять подозрения. Пиши простым разговорным языком, маленькими буквами, обычно без знаков препинания в конце, допускаются лёгкие опечатки и сленг. НЕ используй кавычки, НЕ пиши пояснений и НЕ описывай ситуацию — выдавай ТОЛЬКО сам текст ответа одной короткой фразой (до 100 символов). Если админ задаёт конкретный вопрос (математика, возраст, город, что делаешь) — отвечай правдоподобно и кратко.",
+    CLASSIFY_SYSTEM = "Ты — фильтр сообщений на русском SAMP RP сервере. Тебе приходит одно сообщение от администратора из игрового чата. Реши, обращается ли админ ЛИЧНО к этому игроку и требует ли это сообщение ответа. Личное обращение — это когда админ проверяет именно тебя: спрашивает 'ты тут?', 'ответь', обращается по нику, телепортировал лично тебя, ответил лично тебе на твой вопрос. Массовое объявление — это глобальные события и мероприятия (МП, рулетка, розыгрыш), реклама, премии, набор на работу, 'Уважаемые игроки', объявления для всех — такие сообщения НЕ требуют ответа. Ответь СТРОГО одним английским словом без знаков препинания и пояснений: YES — если это личное обращение к игроку, требующее ответа; NO — если это массовое объявление/событие и отвечать не нужно.",
+    enabled   = (ini.ai.enabled == 'true'),
+    provider  = tonumber(ini.ai.provider) or 3,
+    keyClaude = ini.ai.key_claude or '',
+    keyOpenAI = ini.ai.key_openai or '',
+    keyGemini = ini.ai.key_gemini or '',
+    keyGroq   = ini.ai.key_groq or '',
+    model     = ini.ai.model or '',
+    lastAdminName = '',
+}
+ai.system = (ini.ai.system ~= nil and ini.ai.system ~= '' and ini.ai.system) or ai.DEFAULT_SYSTEM
+
+ai.keyGroqBuf = imgui.new.char[257](ai.keyGroq)
+ai.systemBuf  = imgui.new.char[2049](ai.system)
+
+function ai.save()
+    ini.ai = ini.ai or {}
+    ini.ai.enabled    = tostring(ai.enabled)
+    ini.ai.provider   = tostring(ai.provider)
+    ini.ai.key_claude = ai.keyClaude
+    ini.ai.key_openai = ai.keyOpenAI
+    ini.ai.key_gemini = ai.keyGemini
+    ini.ai.key_groq   = ai.keyGroq
+    ini.ai.model      = ai.model
+    ini.ai.system     = ai.system
+    inicfg.save(ini, 'strand_ferma.ini')
+end
+
+function ai.activeKey()
+    if ai.provider == 0 then return ai.keyClaude
+    elseif ai.provider == 1 then return ai.keyOpenAI
+    elseif ai.provider == 2 then return ai.keyGemini
+    else return ai.keyGroq end
+end
+
+function ai.jsonEscape(s)
+    s = tostring(s or '')
+    s = s:gsub('\\', '\\\\')
+    s = s:gsub('"', '\\"')
+    s = s:gsub('\n', '\\n')
+    s = s:gsub('\r', '\\r')
+    s = s:gsub('\t', '\\t')
+    s = s:gsub('[%z\1-\8\11\12\14-\31]', function(c)
+        return string.format('\\u%04x', string.byte(c))
+    end)
+    return s
+end
+
+function ai.fromU8(s)
+    local ok, r = pcall(function() return u8:decode(s) end)
+    return (ok and r) or s
+end
+
+function ai.request(prompt, system, cb)
+    lua_thread.create(function()
+        local ok, req = pcall(require, 'requests')
+        if not ok or not req then cb(false, 'no requests lib') return end
+
+        local provider = ai.provider
+        local model = ai.model
+        local esc = ai.jsonEscape
+        local url, headers, body
+
+        if provider == 0 then
+            if model == '' then model = 'claude-haiku-4-5' end
+            url = 'https://api.anthropic.com/v1/messages'
+            headers = {
+                ['Content-Type']      = 'application/json',
+                ['x-api-key']         = ai.keyClaude,
+                ['anthropic-version'] = '2023-06-01',
+            }
+            body = '{"model":"'..esc(model)..'","max_tokens":150,'
+                .. '"system":"'..esc(system)..'",'
+                .. '"messages":[{"role":"user","content":"'..esc(prompt)..'"}]}'
+        elseif provider == 1 then
+            if model == '' then model = 'gpt-4o-mini' end
+            url = 'https://api.openai.com/v1/chat/completions'
+            headers = {
+                ['Content-Type']  = 'application/json',
+                ['Authorization'] = 'Bearer ' .. ai.keyOpenAI,
+            }
+            body = '{"model":"'..esc(model)..'","max_tokens":150,'
+                .. '"messages":[{"role":"system","content":"'..esc(system)..'"},'
+                .. '{"role":"user","content":"'..esc(prompt)..'"}]}'
+        elseif provider == 2 then
+            if model == '' then model = 'gemini-2.0-flash' end
+            url = 'https://generativelanguage.googleapis.com/v1beta/models/'
+                .. model .. ':generateContent?key=' .. ai.keyGemini
+            headers = { ['Content-Type'] = 'application/json' }
+            body = '{"system_instruction":{"parts":[{"text":"'..esc(system)..'"}]},'
+                .. '"contents":[{"role":"user","parts":[{"text":"'..esc(prompt)..'"}]}],'
+                .. '"generationConfig":{"maxOutputTokens":150}}'
+        else
+            if model == '' then model = 'llama-3.3-70b-versatile' end
+            url = 'https://api.groq.com/openai/v1/chat/completions'
+            headers = {
+                ['Content-Type']  = 'application/json',
+                ['Authorization'] = 'Bearer ' .. ai.keyGroq,
+            }
+            body = '{"model":"'..esc(model)..'","max_tokens":150,'
+                .. '"messages":[{"role":"system","content":"'..esc(system)..'"},'
+                .. '{"role":"user","content":"'..esc(prompt)..'"}]}'
+        end
+
+        local rok, resp = pcall(req.post, url, { headers = headers, data = body })
+        if not rok or not resp then cb(false, 'no response') return end
+        local bodyText = resp.text or resp.content or ''
+        if resp.status_code ~= 200 then
+            cb(false, 'HTTP ' .. tostring(resp.status_code) .. ': ' .. tostring(bodyText):sub(1, 160))
+            return
+        end
+
+        local data = json.parse(bodyText)
+        if not data then cb(false, 'json parse error') return end
+
+        local text
+        if provider == 0 then
+            text = data.content and data.content[1] and data.content[1].text
+        elseif provider == 2 then
+            text = data.candidates and data.candidates[1] and data.candidates[1].content
+                and data.candidates[1].content.parts and data.candidates[1].content.parts[1]
+                and data.candidates[1].content.parts[1].text
+        else
+            text = data.choices and data.choices[1] and data.choices[1].message
+                and data.choices[1].message.content
+        end
+
+        if not text or text == '' then cb(false, 'empty answer') return end
+        text = text:gsub('^%s+', ''):gsub('%s+$', '')
+        cb(true, text)
+    end)
+end
+
+function ai.buildPrompt(qUtf8, adminName)
+    local head
+    if adminName and adminName ~= '' then
+        head = u8('\xc0\xe4\xec\xe8\xed\xe8\xf1\xf2\xf0\xe0\xf2\xee\xf0 ') .. adminName
+            .. u8(' \xef\xe8\xf8\xe5\xf2 \xf2\xe5\xe1\xe5 \xe2 \xf7\xe0\xf2: ')
+    else
+        head = u8('\xc0\xe4\xec\xe8\xed \xef\xe8\xf8\xe5\xf2 \xf2\xe5\xe1\xe5 \xe2 \xf7\xe0\xf2: ')
+    end
+    return head .. qUtf8
+        .. u8('\n\xce\xf2\xe2\xe5\xf2\xfc \xea\xee\xf0\xee\xf2\xea\xee \xe8 \xe5\xf1\xf2\xe5\xf1\xf2\xe2\xe5\xed\xed\xee, \xea\xe0\xea \xe6\xe8\xe2\xee\xe9 \xe8\xe3\xf0\xee\xea.')
+end
+
+function ai.extractAdminName(text)
+    if not text then return '' end
+    local n = text:match('\xc0\xe4\xec\xe8\xed\xe8\xf1\xf2\xf0\xe0\xf2\xee\xf0%s+([%w_%[%]%(%)]+)')
+    if not n then n = text:match('([%w_%[%]]+)%s+\xee\xf2\xe2\xe5\xf2\xe8\xeb') end
+    if n then
+        n = n:gsub('%[%d+%]', ''):gsub('[%(%)%[%]]', '')
+        if #n >= 3 then return n end
+    end
+    return ''
+end
+
+function ai.classifyAdmin(qUtf8, cb)
+    if not (ai.enabled and ai.activeKey() ~= '') then cb(nil) return end
+    ai.request(qUtf8, ai.CLASSIFY_SYSTEM, function(ok, text)
+        if not ok or not text then cb(nil) return end
+        local up = tostring(text):upper()
+        if up:find('YES') then cb(true)
+        elseif up:find('NO') then cb(false)
+        else cb(nil) end
+    end)
 end
 
 local function loadCfg()
@@ -1541,11 +1748,18 @@ function sampev.onServerMessage(color,txt)
         end
 
         if aaState and farm.running and aaIsAdmin(txtClean)
-        and not aaReplying and aaAngry < 2 and aaLooksDirected(txtClean) then
-            aaLastTrigger  = os.clock()
-            playAntiAdminSound()
-            aaLastQuestion = txtClean
-            lua_thread.create(function() aaSendReply(txtClean) end)
+        and not aaReplying and aaAngry < 2 then
+            local q = txtClean
+            ai.classifyAdmin(u8(q), function(directed)
+                if directed == nil then directed = aaLooksDirected(q) end
+                if not directed then return end
+                if aaReplying or aaAngry >= 2 then return end
+                aaLastTrigger  = os.clock()
+                playAntiAdminSound()
+                ai.lastAdminName = ai.extractAdminName(q)
+                aaLastQuestion = q
+                lua_thread.create(function() aaSendReply(q) end)
+            end)
         end
     end)
 end
@@ -2211,7 +2425,45 @@ local function _renderPage3(DL, WP, cntX, cntY, cntW)
     local aaLbl = u8'\xc0\xe2\xf2\xee-\xee\xf2\xe2\xe5\xf2 \xe0\xe4\xec\xe8\xed\xf3'
     local nv_aa, ch_aa = toggleRow(DL, cntX+8*MDS, cy+(rh-22*MDS)*0.5, cntW-8*MDS, aaLbl, aaState)
     if ch_aa then aaState = nv_aa; saveCfg() end
-    cy = cy + rh + 5*MDS
+    cy = cy + rh + 12*MDS
+
+    sectionTitle(DL, cntX, cy, cntW, u8'\xc8\xc8 \xce\xd2\xc2\xc5\xd2\xdb \xc0\xc4\xcc\xc8\xcd\xd3 (GROQ)')
+    cy = cy + 20*MDS
+
+    rowBg(DL, cntX, cy, cntW, rh)
+    imgui.SetCursorPos(imgui.ImVec2(cntX-WP.x, cy-WP.y))
+    imgui.Dummy(imgui.ImVec2(cntW, rh))
+    local nv_ai, ch_ai = toggleRow(DL, cntX+8*MDS, cy+(rh-22*MDS)*0.5, cntW-8*MDS,
+        u8'\xc2\xea\xeb\xfe\xf7\xe8\xf2\xfc \xc8\xc8-\xee\xf2\xe2\xe5\xf2\xfb', ai.enabled)
+    if ch_ai then ai.enabled = nv_ai; ai.save() end
+    cy = cy + rh + 6*MDS
+
+    DL:AddText(imgui.ImVec2(cntX, cy), u32(CLR.textDim), u8'API \xea\xeb\xfe\xf7 Groq (console.groq.com/keys):')
+    cy = cy + 16*MDS
+    imgui.SetCursorPos(imgui.ImVec2(cntX-WP.x, cy-WP.y))
+    imgui.SetNextItemWidth(cntW)
+    if imgui.InputText('##aikey', ai.keyGroqBuf, 257, imgui.InputTextFlags.Password) then
+        ai.keyGroq = bufToStr(ai.keyGroqBuf, 257)
+        ai.save()
+    end
+    imgui.Dummy(imgui.ImVec2(cntW, 26*MDS))
+    cy = cy + 26*MDS + 8*MDS
+
+    DL:AddText(imgui.ImVec2(cntX, cy), u32(CLR.textDim), u8'\xcf\xf0\xee\xec\xef\xf2 \xe4\xeb\xff \xee\xf2\xe2\xe5\xf2\xee\xe2:')
+    cy = cy + 16*MDS
+    imgui.SetCursorPos(imgui.ImVec2(cntX-WP.x, cy-WP.y))
+    imgui.SetNextItemWidth(cntW)
+    if imgui.InputTextMultiline('##aisys', ai.systemBuf, 2049, imgui.ImVec2(cntW, 64*MDS)) then
+        ai.system = bufToStr(ai.systemBuf, 2049):gsub('[\r\n]+', ' ')
+        ai.save()
+    end
+    imgui.Dummy(imgui.ImVec2(cntW, 64*MDS))
+    cy = cy + 64*MDS + 6*MDS
+
+    local aiOn = ai.enabled and ai.keyGroq ~= ''
+    DL:AddText(imgui.ImVec2(cntX, cy),
+        u32(aiOn and CLR.green or CLR.textDim),
+        aiOn and u8'\xc8\xc8: \xe2\xea\xeb\xfe\xf7\xb8\xed' or u8'\xc8\xc8: \xe2\xfb\xea\xeb (\xed\xe5\xf2 \xea\xeb\xfe\xf7\xe0/\xee\xf2\xea\xeb.)')
 
 end
 
@@ -2284,7 +2536,7 @@ imgui.OnFrame(
         self.HideCursor = true
 
         local W = math.min(resx*0.88, 480*MDS)
-        local H = math.min(resy*0.82, 510*MDS)
+        local H = math.min(resy*0.92, 565*MDS)
 
         imgui.SetNextWindowPos(imgui.ImVec2(resx*0.5, resy*0.5),
             imgui.Cond.FirstUseEver, imgui.ImVec2(0.5,0.5))
