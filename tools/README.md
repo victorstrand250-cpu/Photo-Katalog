@@ -1,13 +1,19 @@
 # Obfuscation tooling
 
-`ST_Mine.obfuscated.lua` is produced from the readable `ST_Mine.lua` with
-the [Prometheus](https://github.com/prometheus-lua/Prometheus) Lua obfuscator.
+`ST_Mine.obfuscated.lua` and `ST_Ferma.obfuscated.lua` are produced from the
+readable `ST_Mine.lua` / `ST_Ferma.lua` with the
+[Prometheus](https://github.com/prometheus-lua/Prometheus) Lua obfuscator.
 
 ## How it was built
 
 ```
-PROMETHEUS_DIR=/path/to/Prometheus ./tools/build_obfuscated.sh
+PROMETHEUS_DIR=/path/to/Prometheus ./tools/build_obfuscated.sh ST_Mine.lua
+PROMETHEUS_DIR=/path/to/Prometheus ./tools/build_obfuscated.sh ST_Ferma.lua
 ```
+
+`ST_Mine.lua` is built with `--globalize` (applied automatically) because its
+main chunk sits at LuaJIT's 200-local limit; `ST_Ferma.lua` needs no
+globalization.
 
 Steps performed:
 
