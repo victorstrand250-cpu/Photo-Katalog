@@ -1,19 +1,27 @@
 # Obfuscation tooling
 
-`ST_Mine.obfuscated.lua` and `ST_Ferma.obfuscated.lua` are produced from the
-readable `ST_Mine.lua` / `ST_Ferma.lua` with the
-[Prometheus](https://github.com/prometheus-lua/Prometheus) Lua obfuscator.
+The `*.obfuscated.lua` files are produced from their readable sources with the
+[Prometheus](https://github.com/prometheus-lua/Prometheus) Lua obfuscator:
+
+| source | obfuscated |
+| --- | --- |
+| `ST_Mine.lua` | `ST_Mine.obfuscated.lua` |
+| `ST_Ferma.lua` | `ST_Ferma.obfuscated.lua` |
+| `server_ST_Ferma.lua` | `server_ST_Ferma.obfuscated.lua` |
+| `serverST_Mine_stok.lua` | `serverST_Mine_stok.obfuscated.lua` |
 
 ## How it was built
 
 ```
 PROMETHEUS_DIR=/path/to/Prometheus ./tools/build_obfuscated.sh ST_Mine.lua
 PROMETHEUS_DIR=/path/to/Prometheus ./tools/build_obfuscated.sh ST_Ferma.lua
+PROMETHEUS_DIR=/path/to/Prometheus ./tools/build_obfuscated.sh server_ST_Ferma.lua
+PROMETHEUS_DIR=/path/to/Prometheus ./tools/build_obfuscated.sh serverST_Mine_stok.lua
 ```
 
-`ST_Mine.lua` is built with `--globalize` (applied automatically) because its
-main chunk sits at LuaJIT's 200-local limit; `ST_Ferma.lua` needs no
-globalization.
+Mine variants (`*Mine*`) are built with `--globalize` (applied automatically)
+because their main chunk sits at LuaJIT's 200-local limit; the Ferma scripts
+need no globalization.
 
 Steps performed:
 

@@ -21,8 +21,12 @@ PROM="${PROMETHEUS_DIR:-$ROOT/Prometheus}"
 
 SRC="${1:-ST_Mine.lua}"
 GLOBALIZE="${2:-}"
-if [ "$SRC" = "ST_Mine.lua" ] && [ -z "$GLOBALIZE" ]; then
-    GLOBALIZE="--globalize"
+# Mine variants (ST_Mine.lua, serverST_Mine_stok.lua, ...) sit at LuaJIT's
+# 200-local limit and need globalization; auto-enable it for them.
+if [ -z "$GLOBALIZE" ]; then
+    case "$(basename "$SRC")" in
+        *Mine*) GLOBALIZE="--globalize" ;;
+    esac
 fi
 
 case "$SRC" in
